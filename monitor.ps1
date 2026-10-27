@@ -1,0 +1,445 @@
+param([switch]$DumpMetrics)
+
+# System monitor gadget: CPU / RAM / Disk / Network, bottom-right, always on top.
+# NOTE: keep this file ASCII-only (Windows PowerShell 5.1 reads BOM-less files as ANSI).
+
+Add-Type -AssemblyName PresentationFramework, PresentationCore, WindowsBase
+Add-Type -AssemblyName Microsoft.VisualBasic
+
+Add-Type @"
+using System;
+using System.Runtime.InteropServices;
+public static class Win32 {
+    [DllImport("user32.dll")] public static extern int GetWindowLong(IntPtr h, int i);
+    [DllImport("user32.dll")] public static extern int SetWindowLong(IntPtr h, int i, int v);
+    [DllImport("user32.dll")] public static extern bool SetWindowPos(IntPtr h, IntPtr after, int x, int y, int cx, int cy, uint flags);
+}
+"@
+
+$GWL_EXSTYLE      = -20
+$WS_EX_TOOLWINDOW = 0x00000080
+$WS_EX_NOACTIVATE = 0x08000000
+$HWND_TOPMOST     = [IntPtr](-1)
+$SWP_FLAGS        = 0x0001 -bor 0x0002 -bor 0x0010 -bor 0x0040   # NOSIZE | NOMOVE | NOACTIVATE | SHOWWINDOW
+
+# ---- counters ----
+$cpuCounter = New-Object Diagnostics.PerformanceCounter('Processor', '% Processor Time', '_Total')
+$null = $cpuCounter.NextValue()
+
+$nicNames = (New-Object Diagnostics.PerformanceCounterCategory('Network Interface')).GetInstanceNames() |
+    Where-Object { $_ -notmatch 'Loopback|isatap' }
+$rxCounters = @($nicNames | ForEach-Object { New-Object Diagnostics.PerformanceCounter('Network Interface', 'Bytes Received/sec', $_) })
+$txCounters = @($nicNames | ForEach-Object { New-Object Diagnostics.PerformanceCounter('Network Interface', 'Bytes Sent/sec', $_) })
+foreach ($c in $rxCounters + $txCounters) { $null = $c.NextValue() }
+
+$sysDrive = $env:SystemDrive.TrimEnd('\')
+$compInfo = New-Object Microsoft.VisualBasic.Devices.ComputerInfo
+
+function Format-Speed([double]$bytes) {
+    if ($bytes -ge 1MB) { '{0:N1} MB/s' -f ($bytes / 1MB) }
+    elseif ($bytes -ge 1KB) { '{0:N0} KB/s' -f ($bytes / 1KB) }
+    else { '{0:N0} B/s' -f $bytes }
+}
+
+function Get-Metrics {
+    $total = [double]$compInfo.TotalPhysicalMemory
+    $used  = $total - [double]$compInfo.AvailablePhysicalMemory
+    $drive = New-Object IO.DriveInfo($sysDrive)
+    $rx = 0.0; foreach ($c in $rxCounters) { $rx += $c.NextValue() }
+    $tx = 0.0; foreach ($c in $txCounters) { $tx += $c.NextValue() }
+    [pscustomobject]@{
+        Cpu       = [math]::Min(100, [math]::Round($cpuCounter.NextValue(), 0))
+        RamPct    = [math]::Round($used / $total * 100, 0)
+        RamUsedGB = $used / 1GB
+        RamTotGB  = $total / 1GB
+        DiskPct   = [math]::Round(($drive.TotalSize - $drive.AvailableFreeSpace) / $drive.TotalSize * 100, 0)
+        DiskFreeGB = $drive.AvailableFreeSpace / 1GB
+        Down      = $rx
+        Up        = $tx
+    }
+}
+
+if ($DumpMetrics) {
+    Start-Sleep -Seconds 1
+    Get-Metrics | Format-List
+    return
+}
+
+# ---- UI ----
+# ---- user settings (saved to %LOCALAPPDATA%\system-monitor\settings.json) ----
+$settingsFile = Join-Path $env:LOCALAPPDATA 'system-monitor\settings.json'
+$settings = @{ Transparency = 25; ShowCalendar = $true; ShowClaude = $true; Collapsed = $false }
+if (Test-Path $settingsFile) {
+    try {
+        $saved = Get-Content $settingsFile -Raw | ConvertFrom-Json
+        foreach ($k in @($settings.Keys)) { if ($null -ne $saved.$k) { $settings[$k] = $saved.$k } }
+    } catch { }
+}
+$settings.Transparency = [math]::Min(90, [math]::Max(0, [int]$settings.Transparency))
+
+function Save-Settings {
+    New-Item -ItemType Directory -Force (Split-Path $settingsFile) | Out-Null
+    $settings | ConvertTo-Json | Set-Content $settingsFile -Encoding UTF8
+}
+
+[xml]$xaml = @"
+<Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        WindowStyle="None" AllowsTransparency="True" Background="Transparent"
+        ShowInTaskbar="False" Topmost="True" ResizeMode="NoResize"
+        Width="210" SizeToContent="Height" ShowActivated="False">
+  <Border Name="Root" CornerRadius="8" Background="#C0181818" Padding="10,8">
+    <Border.ContextMenu>
+      <ContextMenu>
+        <MenuItem Name="MenuSettings" Header="Settings..."/>
+        <MenuItem Name="MenuHide" Header="Hide"/>
+        <MenuItem Name="MenuExit" Header="Exit"/>
+      </ContextMenu>
+    </Border.ContextMenu>
+    <Grid>
+    <StackPanel Name="FullPanel">
+    <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,-3,-4,0">
+      <TextBlock Name="BtnSettings" Foreground="#9AA0A6" FontFamily="Segoe UI Symbol" FontSize="13" Cursor="Hand"
+                 ToolTip="Settings" Padding="4,0"/>
+      <TextBlock Name="BtnHide" Foreground="#9AA0A6" FontFamily="Segoe UI Symbol" FontSize="13" Cursor="Hand"
+                 ToolTip="Collapse" Padding="4,0"/>
+    </StackPanel>
+    <Grid Name="MainGrid" Height="176">
+      <Grid.RowDefinitions>
+        <RowDefinition Height="*"/><RowDefinition Height="*"/><RowDefinition Height="*"/><RowDefinition Height="*"/>
+        <RowDefinition Height="*"/><RowDefinition Height="*"/>
+      </Grid.RowDefinitions>
+      <Grid.ColumnDefinitions>
+        <ColumnDefinition Width="42"/><ColumnDefinition Width="*"/>
+      </Grid.ColumnDefinitions>
+      <TextBlock Grid.Row="0" Foreground="#9AA0A6" FontSize="12" Text="CPU" VerticalAlignment="Center"/>
+      <StackPanel Grid.Row="0" Grid.Column="1" VerticalAlignment="Center">
+        <TextBlock Name="CpuText" Foreground="White" FontSize="12" HorizontalAlignment="Right"/>
+        <ProgressBar Name="CpuBar" Height="4" Maximum="100" Foreground="#4FC3F7" Background="#33FFFFFF" BorderThickness="0"/>
+      </StackPanel>
+      <TextBlock Grid.Row="1" Foreground="#9AA0A6" FontSize="12" Text="RAM" VerticalAlignment="Center"/>
+      <StackPanel Grid.Row="1" Grid.Column="1" VerticalAlignment="Center">
+        <TextBlock Name="RamText" Foreground="White" FontSize="12" HorizontalAlignment="Right"/>
+        <ProgressBar Name="RamBar" Height="4" Maximum="100" Foreground="#81C784" Background="#33FFFFFF" BorderThickness="0"/>
+      </StackPanel>
+      <TextBlock Grid.Row="2" Foreground="#9AA0A6" FontSize="12" Text="Disk" VerticalAlignment="Center"/>
+      <StackPanel Grid.Row="2" Grid.Column="1" VerticalAlignment="Center">
+        <TextBlock Name="DiskText" Foreground="White" FontSize="12" HorizontalAlignment="Right"/>
+        <ProgressBar Name="DiskBar" Height="4" Maximum="100" Foreground="#FFB74D" Background="#33FFFFFF" BorderThickness="0"/>
+      </StackPanel>
+      <TextBlock Grid.Row="3" Foreground="#9AA0A6" FontSize="12" Text="Net" VerticalAlignment="Center"/>
+      <TextBlock Grid.Row="3" Grid.Column="1" Name="NetText" Foreground="White" FontSize="11"
+                 HorizontalAlignment="Right" VerticalAlignment="Center"/>
+      <TextBlock Grid.Row="4" Foreground="#9AA0A6" FontSize="12" Text="5hr" VerticalAlignment="Center"/>
+      <StackPanel Grid.Row="4" Grid.Column="1" VerticalAlignment="Center">
+        <TextBlock Name="SessText" Foreground="White" FontSize="12" HorizontalAlignment="Right"/>
+        <ProgressBar Name="SessBar" Height="4" Maximum="100" Foreground="#26A69A" Background="#33FFFFFF" BorderThickness="0"/>
+      </StackPanel>
+      <TextBlock Grid.Row="5" Foreground="#9AA0A6" FontSize="12" Text="Week" VerticalAlignment="Center"/>
+      <StackPanel Grid.Row="5" Grid.Column="1" VerticalAlignment="Center">
+        <TextBlock Name="WeekText" Foreground="White" FontSize="12" HorizontalAlignment="Right"/>
+        <ProgressBar Name="WeekBar" Height="4" Maximum="100" Foreground="#26A69A" Background="#33FFFFFF" BorderThickness="0"/>
+      </StackPanel>
+    </Grid>
+    <StackPanel Name="CalPanel" Margin="0,8,0,0">
+      <Rectangle Height="1" Fill="#33FFFFFF" Margin="0,0,0,6"/>
+      <Grid>
+        <TextBlock Name="CalPrev" Text="&lt;" Foreground="#9AA0A6" FontSize="12" Cursor="Hand" Padding="4,0" HorizontalAlignment="Left"/>
+        <TextBlock Name="CalTitle" Foreground="White" FontSize="12" FontWeight="SemiBold" Cursor="Hand" HorizontalAlignment="Center"/>
+        <TextBlock Name="CalNext" Text="&gt;" Foreground="#9AA0A6" FontSize="12" Cursor="Hand" Padding="4,0" HorizontalAlignment="Right"/>
+      </Grid>
+      <UniformGrid Name="CalGrid" Columns="7" Margin="0,4,0,0"/>
+    </StackPanel>
+    </StackPanel>
+    <Grid Name="MiniPanel" Visibility="Collapsed" Background="Transparent" Cursor="Hand" ToolTip="Click to expand">
+      <Grid VerticalAlignment="Center" Margin="0,2,16,2">
+        <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+        <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+        <StackPanel Grid.Row="0" Grid.Column="0" Margin="0,0,8,0">
+          <TextBlock Name="MiniCpuText" Foreground="White" FontSize="11"/>
+          <ProgressBar Name="MiniCpuBar" Height="4" Maximum="100" Foreground="#4FC3F7" Background="#33FFFFFF" BorderThickness="0" Margin="0,2,0,0"/>
+        </StackPanel>
+        <StackPanel Grid.Row="0" Grid.Column="1">
+          <TextBlock Name="MiniRamText" Foreground="White" FontSize="11"/>
+          <ProgressBar Name="MiniRamBar" Height="4" Maximum="100" Foreground="#81C784" Background="#33FFFFFF" BorderThickness="0" Margin="0,2,0,0"/>
+        </StackPanel>
+        <StackPanel Name="MiniSessCell" Grid.Row="1" Grid.Column="0" Margin="0,6,8,0">
+          <TextBlock Name="MiniSessText" Foreground="White" FontSize="11"/>
+          <ProgressBar Name="MiniSessBar" Height="4" Maximum="100" Foreground="#26A69A" Background="#33FFFFFF" BorderThickness="0" Margin="0,2,0,0"/>
+        </StackPanel>
+        <StackPanel Name="MiniWeekCell" Grid.Row="1" Grid.Column="1" Margin="0,6,0,0">
+          <TextBlock Name="MiniWeekText" Foreground="White" FontSize="11"/>
+          <ProgressBar Name="MiniWeekBar" Height="4" Maximum="100" Foreground="#26A69A" Background="#33FFFFFF" BorderThickness="0" Margin="0,2,0,0"/>
+        </StackPanel>
+      </Grid>
+      <TextBlock Name="MiniPlus" Foreground="#9AA0A6" FontFamily="Segoe UI Symbol" FontSize="13" Text="+"
+                 HorizontalAlignment="Right" VerticalAlignment="Center" Padding="4,0"/>
+    </Grid>
+    </Grid>
+  </Border>
+</Window>
+"@
+
+$win = [Windows.Markup.XamlReader]::Load((New-Object Xml.XmlNodeReader $xaml))
+$ui = @{}
+foreach ($n in 'CpuText','CpuBar','RamText','RamBar','DiskText','DiskBar','NetText','SessText','SessBar','WeekText','WeekBar','CalPanel','CalPrev','CalTitle','CalNext','CalGrid','Root','MainGrid','BtnSettings','BtnHide','FullPanel','MiniPanel','MiniCpuText','MiniCpuBar','MiniRamText','MiniRamBar','MiniSessCell','MiniSessText','MiniSessBar','MiniWeekCell','MiniWeekText','MiniWeekBar','MenuSettings','MenuHide','MenuExit') { $ui[$n] = $win.FindName($n) }
+$ui.MenuExit.Add_Click({ $win.Close() })
+
+function Set-Position {
+    $wa = [Windows.SystemParameters]::WorkArea
+    $h = if ($win.ActualHeight -gt 0) { $win.ActualHeight } else { 192 }
+    $win.Left = $wa.Right - $win.Width - 12
+    $win.Top  = $wa.Bottom - $h - 12
+}
+
+# ---- desk calendar (Thai culture: Thai month names, Buddhist year) ----
+$thai = [Globalization.CultureInfo]::GetCultureInfo('th-TH')
+$calState = @{ Offset = 0; Key = '' }
+$calBrush = New-Object Windows.Media.BrushConverter
+$calText = $calBrush.ConvertFromString('#E8EAED'); $calSun = $calBrush.ConvertFromString('#E57373')
+$calDim = $calBrush.ConvertFromString('#9AA0A6');  $calToday = $calBrush.ConvertFromString('#26A69A')
+
+function Add-CalCell([string]$text, $fg, $bg) {
+    $tb = New-Object Windows.Controls.TextBlock
+    $tb.Text = $text; $tb.FontSize = 11; $tb.Foreground = $fg
+    $tb.HorizontalAlignment = 'Center'; $tb.VerticalAlignment = 'Center'
+    $b = New-Object Windows.Controls.Border
+    $b.Height = 19; $b.CornerRadius = New-Object Windows.CornerRadius 9.5; $b.Child = $tb
+    if ($bg) { $b.Background = $bg }
+    [void]$ui.CalGrid.Children.Add($b)
+}
+
+function Update-Calendar {
+    $today = (Get-Date).Date
+    $key = '{0:yyyyMMdd}|{1}' -f $today, $calState.Offset
+    if ($key -eq $calState.Key) { return }
+    $calState.Key = $key
+    $first = [DateTime]::new($today.Year, $today.Month, 1).AddMonths($calState.Offset)
+    $ui.CalTitle.Text = $first.ToString('MMMM yyyy', $thai)
+    $ui.CalGrid.Children.Clear()
+    $dn = $thai.DateTimeFormat.AbbreviatedDayNames
+    for ($i = 0; $i -lt 7; $i++) { Add-CalCell $dn[$i].TrimEnd('.') $(if ($i -eq 0) { $calSun } else { $calDim }) $null }
+    $lead = [int]$first.DayOfWeek
+    $days = [DateTime]::DaysInMonth($first.Year, $first.Month)
+    for ($c = 0; $c -lt 42; $c++) {
+        $d = $c - $lead + 1
+        if ($d -lt 1 -or $d -gt $days) { Add-CalCell '' $calText $null; continue }
+        $date = $first.AddDays($d - 1)
+        if ($date -eq $today) { Add-CalCell "$d" 'White' $calToday }
+        elseif ($date.DayOfWeek -eq 'Sunday') { Add-CalCell "$d" $calSun $null }
+        else { Add-CalCell "$d" $calText $null }
+    }
+}
+$ui.CalPrev.Add_MouseLeftButtonUp({ $calState.Offset--; Update-Calendar })
+$ui.CalNext.Add_MouseLeftButtonUp({ $calState.Offset++; Update-Calendar })
+$ui.CalTitle.Add_MouseLeftButtonUp({ $calState.Offset = 0; Update-Calendar })
+
+# ---- apply settings to the gadget ----
+function Apply-Settings {
+    $alpha = [byte][math]::Round((100 - $settings.Transparency) / 100 * 255)
+    $ui.Root.Background = New-Object Windows.Media.SolidColorBrush ([Windows.Media.Color]::FromArgb($alpha, 0x18, 0x18, 0x18))
+    $ui.CalPanel.Visibility = if ($settings.ShowCalendar) { 'Visible' } else { 'Collapsed' }
+    # rows 4-5 of the main grid are the Claude usage rows; collapse them and shrink the grid to match
+    $showClaude = [bool]$settings.ShowClaude
+    $vis = if ($showClaude) { 'Visible' } else { 'Collapsed' }
+    foreach ($c in $ui.MainGrid.Children) { if ([Windows.Controls.Grid]::GetRow($c) -ge 4) { $c.Visibility = $vis } }
+    foreach ($i in 4, 5) {
+        $ui.MainGrid.RowDefinitions[$i].Height = if ($showClaude) { [Windows.GridLength]::new(1, [Windows.GridUnitType]::Star) } else { [Windows.GridLength]::new(0) }
+    }
+    $ui.MainGrid.Height = 176 / 6 * $(if ($showClaude) { 6 } else { 4 })
+    # collapsed = small one-line bar (CPU / RAM) instead of the full gadget
+    $ui.FullPanel.Visibility = if ($settings.Collapsed) { 'Collapsed' } else { 'Visible' }
+    $ui.MiniPanel.Visibility = if ($settings.Collapsed) { 'Visible' } else { 'Collapsed' }
+    $ui.MiniSessCell.Visibility = $vis
+    $ui.MiniWeekCell.Visibility = $vis
+}
+
+function Set-Collapsed([bool]$collapsed) {
+    $settings.Collapsed = $collapsed
+    Apply-Settings; Save-Settings
+    $win.UpdateLayout()
+    Set-Position
+}
+
+# ---- settings window (opened from the right-click menu) ----
+[xml]$setXaml = @"
+<Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        Title="System Monitor Settings" Width="290" SizeToContent="Height"
+        WindowStartupLocation="CenterScreen" ResizeMode="NoResize" Topmost="True" Background="#202124">
+  <StackPanel Margin="16">
+    <TextBlock Name="TransLabel" Foreground="White" FontSize="13"/>
+    <Slider Name="TransSlider" Minimum="0" Maximum="90" TickFrequency="5" IsSnapToTickEnabled="True" Margin="0,6,0,2"/>
+    <TextBlock Text="0% = solid, higher = more see-through" Foreground="#9AA0A6" FontSize="11" Margin="0,0,0,14"/>
+    <CheckBox Name="ChkCal" Content="Show calendar" Foreground="White" Margin="0,0,0,8"/>
+    <CheckBox Name="ChkClaude" Content="Show Claude usage (5hr / Week)" Foreground="White"/>
+  </StackPanel>
+</Window>
+"@
+$script:setWin = $null
+$script:setUi = @{}
+
+function Show-Settings {
+    if ($script:setWin) { [void]$script:setWin.Activate(); return }
+    $w = [Windows.Markup.XamlReader]::Load((New-Object Xml.XmlNodeReader $setXaml))
+    $script:setWin = $w
+    foreach ($n in 'TransLabel','TransSlider','ChkCal','ChkClaude') { $script:setUi[$n] = $w.FindName($n) }
+    $script:setUi.TransSlider.Value = $settings.Transparency
+    $script:setUi.TransLabel.Text = 'Transparency: {0}%' -f $settings.Transparency
+    $script:setUi.ChkCal.IsChecked = [bool]$settings.ShowCalendar
+    $script:setUi.ChkClaude.IsChecked = [bool]$settings.ShowClaude
+    $script:setUi.TransSlider.Add_ValueChanged({
+        $settings.Transparency = [int]$script:setUi.TransSlider.Value
+        $script:setUi.TransLabel.Text = 'Transparency: {0}%' -f $settings.Transparency
+        Apply-Settings; Save-Settings
+    })
+    $script:setUi.ChkCal.Add_Click({ $settings.ShowCalendar = [bool]$script:setUi.ChkCal.IsChecked; Apply-Settings; Save-Settings })
+    $script:setUi.ChkClaude.Add_Click({ $settings.ShowClaude = [bool]$script:setUi.ChkClaude.IsChecked; Apply-Settings; Save-Settings })
+    $w.Add_Closed({ $script:setWin = $null })
+    $w.Show()
+}
+$ui.MenuSettings.Add_Click({ Show-Settings })
+# gear button (top-right of the gadget); U+2699 built in code to keep this file ASCII
+$ui.BtnSettings.Text = [string][char]0x2699
+$ui.BtnSettings.Add_MouseLeftButtonUp({ Show-Settings })
+$ui.BtnSettings.Add_MouseEnter({ $ui.BtnSettings.Foreground = [Windows.Media.Brushes]::White })
+$ui.BtnSettings.Add_MouseLeave({ $ui.BtnSettings.Foreground = $calDim })
+
+# ---- hide / show the gadget (tray icon brings it back) ----
+Add-Type -AssemblyName System.Windows.Forms, System.Drawing
+$script:hideHintShown = $false
+
+function Toggle-Gadget {
+    if ($win.Visibility -eq 'Visible') {
+        $win.Visibility = 'Hidden'
+        if (-not $script:hideHintShown) {
+            $script:hideHintShown = $true
+            $tray.ShowBalloonTip(2000, 'System Monitor', 'Click the tray icon to show it again.', [Windows.Forms.ToolTipIcon]::Info)
+        }
+    } else {
+        $win.Visibility = 'Visible'
+        Set-Position
+    }
+}
+
+$ui.BtnHide.Text = [string][char]0x2212
+$ui.BtnHide.Add_MouseLeftButtonUp({ Set-Collapsed $true })
+$ui.MiniPanel.Add_MouseLeftButtonUp({ Set-Collapsed $false })
+$ui.BtnHide.Add_MouseEnter({ $ui.BtnHide.Foreground = [Windows.Media.Brushes]::White })
+$ui.BtnHide.Add_MouseLeave({ $ui.BtnHide.Foreground = $calDim })
+$ui.MenuHide.Add_Click({ Toggle-Gadget })
+
+# tray icon: three small bars drawn in code (no .ico file needed)
+$bmp = New-Object Drawing.Bitmap 16, 16
+$gfx = [Drawing.Graphics]::FromImage($bmp)
+$gfx.Clear([Drawing.Color]::FromArgb(32, 33, 36))
+$barColors = @([Drawing.Color]::FromArgb(79, 195, 247), [Drawing.Color]::FromArgb(129, 199, 132), [Drawing.Color]::FromArgb(255, 183, 77))
+$barTops   = @(8, 3, 6)
+for ($i = 0; $i -lt 3; $i++) {
+    $gfx.FillRectangle((New-Object Drawing.SolidBrush $barColors[$i]), 2 + 5 * $i, $barTops[$i], 3, 14 - $barTops[$i])
+}
+$gfx.Dispose()
+$tray = New-Object Windows.Forms.NotifyIcon
+$tray.Icon = [Drawing.Icon]::FromHandle($bmp.GetHicon())
+$tray.Text = 'System Monitor'
+$trayMenu = New-Object Windows.Forms.ContextMenuStrip
+$miToggle = $trayMenu.Items.Add('Show / Hide')
+$miSet    = $trayMenu.Items.Add('Settings...')
+$miExit   = $trayMenu.Items.Add('Exit')
+$miToggle.Add_Click({ Toggle-Gadget })
+$miSet.Add_Click({ Show-Settings })
+$miExit.Add_Click({ $win.Close() })
+$tray.ContextMenuStrip = $trayMenu
+$tray.Add_MouseClick({ param($s, $e) if ($e.Button -eq [Windows.Forms.MouseButtons]::Left) { Toggle-Gadget } })
+$tray.Visible = $true
+$win.Add_Closed({ $tray.Visible = $false; $tray.Dispose() })
+
+Apply-Settings
+
+$win.Add_SourceInitialized({
+    $h = (New-Object Windows.Interop.WindowInteropHelper $win).Handle
+    $ex = [Win32]::GetWindowLong($h, $GWL_EXSTYLE)
+    [void][Win32]::SetWindowLong($h, $GWL_EXSTYLE, ($ex -bor $WS_EX_TOOLWINDOW -bor $WS_EX_NOACTIVATE))
+    Set-Position
+})
+
+# ---- Claude usage (written by claude-usage-hook.ps1 via Claude Code's statusLine) ----
+$usageFile  = Join-Path $env:LOCALAPPDATA 'system-monitor\claude-usage.json'
+$usageState = @{ Stamp = $null; Data = $null }
+$brush = New-Object Windows.Media.BrushConverter
+$barOk = $brush.ConvertFromString('#26A69A'); $barWarn = $brush.ConvertFromString('#FFB74D'); $barHot = $brush.ConvertFromString('#E57373')
+
+function Get-UsageData {
+    if (-not (Test-Path $usageFile)) { $usageState.Data = $null; return }
+    $stamp = (Get-Item $usageFile).LastWriteTimeUtc
+    if ($stamp -eq $usageState.Stamp) { return }
+    $usageState.Stamp = $stamp
+    try { $usageState.Data = Get-Content $usageFile -Raw | ConvertFrom-Json } catch { $usageState.Data = $null }
+}
+
+function Format-Remaining([double]$sec) {
+    $t = [TimeSpan]::FromSeconds($sec)
+    if ($t.TotalDays -ge 1) { '{0}d {1}h' -f [int]$t.Days, $t.Hours }
+    elseif ($t.TotalHours -ge 1) { '{0}h {1}m' -f [int]$t.Hours, $t.Minutes }
+    else { '{0}m' -f [math]::Max(1, [int]$t.Minutes) }
+}
+
+# collapsed-bar version of Set-UsageRow: short "label pct" text + colored bar
+function Set-MiniUsage($limit, [string]$label, $text, $bar) {
+    $reset = if ($limit) { [double]$limit.resets_at } else { 0 }
+    if ($reset -gt 1e11) { $reset = $reset / 1000 }
+    if (-not $limit -or $reset -le [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()) { $text.Text = "$label --"; $bar.Value = 0; return }
+    $pct = [math]::Round([double]$limit.used_percentage, 0)
+    $text.Text = '{0} {1}%' -f $label, $pct
+    $bar.Value = $pct
+    $bar.Foreground = if ($pct -ge 95) { $barHot } elseif ($pct -ge 80) { $barWarn } else { $barOk }
+}
+
+function Set-UsageRow($limit, $text, $bar) {
+    $now = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
+    $reset = if ($limit) { [double]$limit.resets_at } else { 0 }
+    if ($reset -gt 1e11) { $reset = $reset / 1000 }
+    if (-not $limit -or $reset -le $now) { $text.Text = '--'; $bar.Value = 0; return }
+    $pct = [math]::Round([double]$limit.used_percentage, 0)
+    $text.Text = '{0}%  resets {1}' -f $pct, (Format-Remaining ($reset - $now))
+    $bar.Value = $pct
+    $bar.Foreground = if ($pct -ge 95) { $barHot } elseif ($pct -ge 80) { $barWarn } else { $barOk }
+}
+
+$update = {
+    # hidden: skip work, and don't call SetWindowPos below (its SHOWWINDOW flag would re-show the window)
+    if ($win.Visibility -ne 'Visible') { return }
+    Update-Calendar
+    Get-UsageData
+    $rl = if ($usageState.Data) { $usageState.Data.rate_limits } else { $null }
+    $fh = if ($rl) { $rl.five_hour } else { $null }
+    $sd = if ($rl) { $rl.seven_day } else { $null }
+    Set-UsageRow $fh $ui.SessText $ui.SessBar
+    Set-UsageRow $sd $ui.WeekText $ui.WeekBar
+    Set-MiniUsage $fh '5hr' $ui.MiniSessText $ui.MiniSessBar
+    Set-MiniUsage $sd 'Week' $ui.MiniWeekText $ui.MiniWeekBar
+    $m = Get-Metrics
+    $ui.MiniCpuText.Text = 'CPU {0}%' -f $m.Cpu
+    $ui.MiniCpuBar.Value = $m.Cpu
+    $ui.MiniRamText.Text = 'RAM {0}%' -f $m.RamPct
+    $ui.MiniRamBar.Value = $m.RamPct
+    $ui.CpuText.Text  = '{0}%' -f $m.Cpu
+    $ui.CpuBar.Value  = $m.Cpu
+    $ui.RamText.Text  = '{0:N1} / {1:N1} GB ({2}%)' -f $m.RamUsedGB, $m.RamTotGB, $m.RamPct
+    $ui.RamBar.Value  = $m.RamPct
+    $ui.DiskText.Text = '{0}: {1}% ({2:N0} GB free)' -f $sysDrive, $m.DiskPct, $m.DiskFreeGB
+    $ui.DiskBar.Value = $m.DiskPct
+    $ui.NetText.Text  = [string]::Format([char]0x2193 + ' {0}  ' + [char]0x2191 + ' {1}', (Format-Speed $m.Down), (Format-Speed $m.Up))
+    # keep position (resolution / taskbar changes) and re-assert topmost
+    Set-Position
+    $h = (New-Object Windows.Interop.WindowInteropHelper $win).Handle
+    [void][Win32]::SetWindowPos($h, $HWND_TOPMOST, 0, 0, 0, 0, $SWP_FLAGS)
+}
+
+$timer = New-Object Windows.Threading.DispatcherTimer
+$timer.Interval = [TimeSpan]::FromSeconds(1)
+$timer.Add_Tick($update)
+$win.Add_Loaded({ & $update; $timer.Start() })
+
+# Application.Run (not ShowDialog): hiding a ShowDialog window would end the program
+$app = New-Object Windows.Application
+$app.ShutdownMode = 'OnMainWindowClose'
+[void]$app.Run($win)
