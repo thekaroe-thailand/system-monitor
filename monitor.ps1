@@ -68,10 +68,11 @@ if ($DumpMetrics) {
 # ---- UI ----
 # ---- user settings (saved to %LOCALAPPDATA%\system-monitor\settings.json) ----
 $settingsFile = Join-Path $env:LOCALAPPDATA 'system-monitor\settings.json'
-$AppVersion = '1.1.0'
+$AppVersion = '1.2.0'
 $repoSlug   = 'thekaroe-thailand/system-monitor'
 $settings = @{ Transparency = 25; ShowCalendar = $true; ShowClaude = $true; Collapsed = $false
-               AutoCheckUpdates = $true; LastUpdateCheck = 0; LatestTag = '' }
+               AutoCheckUpdates = $true; LastUpdateCheck = 0; LatestTag = ''
+               AutoInstallUpdates = $true; LastAutoAttemptTag = ''; LastAutoAttemptAt = 0 }
 if (Test-Path $settingsFile) {
     try {
         $saved = Get-Content $settingsFile -Raw | ConvertFrom-Json
@@ -279,6 +280,7 @@ function Set-Collapsed([bool]$collapsed) {
     <Rectangle Height="1" Fill="#33FFFFFF" Margin="0,14,0,12"/>
     <TextBlock Name="VerLabel" Foreground="#9AA0A6" FontSize="12"/>
     <CheckBox Name="ChkUpdate" Content="Check for updates automatically (daily)" Foreground="White" Margin="0,8,0,8"/>
+    <CheckBox Name="ChkAutoInstall" Content="Install updates automatically" Foreground="White" Margin="0,0,0,8"/>
     <StackPanel Orientation="Horizontal">
       <Button Name="BtnCheck" Content="Check now" Padding="10,3"/>
       <Button Name="BtnDoUpdate" Content="Update now" Padding="10,3" Margin="8,0,0,0" Visibility="Collapsed"/>
@@ -295,7 +297,7 @@ function Show-Settings {
     if ($script:setWin) { [void]$script:setWin.Activate(); return }
     $w = [Windows.Markup.XamlReader]::Load((New-Object Xml.XmlNodeReader $setXaml))
     $script:setWin = $w
-    foreach ($n in 'TransLabel','TransSlider','ChkCal','ChkClaude','VerLabel','ChkUpdate','BtnCheck','BtnDoUpdate','UpdStatus') { $script:setUi[$n] = $w.FindName($n) }
+    foreach ($n in 'TransLabel','TransSlider','ChkCal','ChkClaude','VerLabel','ChkUpdate','ChkAutoInstall','BtnCheck','BtnDoUpdate','UpdStatus') { $script:setUi[$n] = $w.FindName($n) }
     $script:setUi.TransSlider.Value = $settings.Transparency
     $script:setUi.TransLabel.Text = 'Transparency: {0}%' -f $settings.Transparency
     $script:setUi.ChkCal.IsChecked = [bool]$settings.ShowCalendar
@@ -310,6 +312,8 @@ function Show-Settings {
     $script:setUi.VerLabel.Text = "Version $AppVersion"
     $script:setUi.ChkUpdate.IsChecked = [bool]$settings.AutoCheckUpdates
     $script:setUi.ChkUpdate.Add_Click({ $settings.AutoCheckUpdates = [bool]$script:setUi.ChkUpdate.IsChecked; Save-Settings })
+    $script:setUi.ChkAutoInstall.IsChecked = [bool]$settings.AutoInstallUpdates
+    $script:setUi.ChkAutoInstall.Add_Click({ $settings.AutoInstallUpdates = [bool]$script:setUi.ChkAutoInstall.IsChecked; Save-Settings })
     $script:setUi.BtnCheck.Add_Click({ Start-UpdateCheck })
     $script:setUi.BtnDoUpdate.Add_Click({ Start-Update })
     Refresh-UpdateUi
@@ -450,7 +454,7 @@ function Set-UsageRow($limit, $text, $bar, [double]$ageSec) {
 $installedDir = Join-Path $env:LOCALAPPDATA 'Programs\system-monitor'
 $isInstalled  = ($PSScriptRoot -ieq $installedDir)
 $appStart     = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
-$updateState  = @{ Task = $null; Error = ''; Checked = $false; RetryAt = 0; Init = $false }
+$updateState  = @{ Task = $null; Error = ''; Checked = $false; RetryAt = 0; Init = $false; Updating = $false }
 
 function Test-UpdateAvailable {
     if (-not $settings.LatestTag) { return $false }
@@ -493,7 +497,7 @@ function Update-Poll {
         $updateState.Task = $null
         $tag = $null
         if (-not ($t.IsFaulted -or $t.IsCanceled)) { try { $tag = ($t.Result | ConvertFrom-Json).tag_name } catch { } }
-        if ($tag) {
+        if ($tag -and ([string]$tag) -match '^v\d+\.\d+\.\d+$') {   # strict format: the tag ends up inside a command line
             $settings.LatestTag = [string]$tag; $settings.LastUpdateCheck = $now; $updateState.Error = ''
             Save-Settings
         } else {
@@ -503,18 +507,31 @@ function Update-Poll {
         $updateState.Checked = $true
         Refresh-UpdateUi
     }
+    # auto-install: at most one attempt per version per 24h, so a failing install can't loop
+    if ($settings.AutoInstallUpdates -and $isInstalled -and -not $updateState.Updating -and ($now - $appStart -gt 30) -and (Test-UpdateAvailable)) {
+        $again = ($settings.LastAutoAttemptTag -ne $settings.LatestTag) -or (($now - [double]$settings.LastAutoAttemptAt) -gt 86400)
+        if ($again) {
+            $settings.LastAutoAttemptTag = [string]$settings.LatestTag; $settings.LastAutoAttemptAt = $now
+            Save-Settings
+            Start-Update
+        }
+    }
 }
 
 # the installer is run from the NEW tag; SM_CLAUDE_USAGE=skip keeps it from re-asking the Claude question
 function Get-UpdateArgs {
+    if (([string]$settings.LatestTag) -notmatch '^v\d+\.\d+\.\d+$') { return $null }
     $url = "https://raw.githubusercontent.com/$repoSlug/$($settings.LatestTag)/install.ps1"
     $cmd = "`$env:SM_CLAUDE_USAGE='skip'; irm '$url' | iex"
     @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-WindowStyle', 'Hidden', '-Command', $cmd)
 }
 
 function Start-Update {
-    if (-not ($isInstalled -and (Test-UpdateAvailable))) { return }
-    Start-Process powershell.exe -ArgumentList (Get-UpdateArgs)
+    if ($updateState.Updating -or -not ($isInstalled -and (Test-UpdateAvailable))) { return }
+    $updateArgs = Get-UpdateArgs
+    if (-not $updateArgs) { return }
+    $updateState.Updating = $true
+    Start-Process powershell.exe -ArgumentList $updateArgs
     if ($script:setWin) { $script:setUi.UpdStatus.Text = 'Updating... the gadget will restart in a few seconds.'; $script:setUi.BtnDoUpdate.IsEnabled = $false }
 }
 
