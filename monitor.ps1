@@ -68,7 +68,7 @@ if ($DumpMetrics) {
 # ---- UI ----
 # ---- user settings (saved to %LOCALAPPDATA%\system-monitor\settings.json) ----
 $settingsFile = Join-Path $env:LOCALAPPDATA 'system-monitor\settings.json'
-$AppVersion = '1.2.3'
+$AppVersion = '1.2.4'
 $repoSlug   = 'thekaroe-thailand/system-monitor'
 $settings = @{ Transparency = 25; ShowCalendar = $true; ShowClaude = $true; Collapsed = $false
                AutoCheckUpdates = $true; LastUpdateCheck = 0; LatestTag = ''
@@ -94,6 +94,8 @@ function Save-Settings {
   <Border Name="Root" CornerRadius="8" Background="#C0181818" Padding="10,8">
     <Border.ContextMenu>
       <ContextMenu>
+        <MenuItem Name="MenuVer" IsEnabled="False"/>
+        <Separator/>
         <MenuItem Name="MenuSettings" Header="Settings..."/>
         <MenuItem Name="MenuHide" Header="Hide"/>
         <MenuItem Name="MenuExit" Header="Exit"/>
@@ -101,7 +103,9 @@ function Save-Settings {
     </Border.ContextMenu>
     <Grid>
     <StackPanel Name="FullPanel">
-    <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,-3,-4,0">
+    <Grid Margin="0,-3,-4,0">
+    <TextBlock Name="VerText" Foreground="#9AA0A6" FontSize="11" VerticalAlignment="Center" HorizontalAlignment="Left"/>
+    <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
       <TextBlock Name="BtnUpdate" Foreground="#26A69A" FontSize="11" Cursor="Hand" Visibility="Collapsed"
                  VerticalAlignment="Center" Padding="4,0" ToolTip="Update available - click to open Settings"/>
       <TextBlock Name="BtnSettings" Foreground="#9AA0A6" FontFamily="Segoe UI Symbol" FontSize="13" Cursor="Hand"
@@ -109,6 +113,7 @@ function Save-Settings {
       <TextBlock Name="BtnHide" Foreground="#9AA0A6" FontFamily="Segoe UI Symbol" FontSize="13" Cursor="Hand"
                  ToolTip="Collapse" Padding="4,0"/>
     </StackPanel>
+    </Grid>
     <Grid Name="MainGrid" Height="176">
       <Grid.RowDefinitions>
         <RowDefinition Height="*"/><RowDefinition Height="*"/><RowDefinition Height="*"/><RowDefinition Height="*"/>
@@ -187,7 +192,7 @@ function Save-Settings {
 
 $win = [Windows.Markup.XamlReader]::Load((New-Object Xml.XmlNodeReader $xaml))
 $ui = @{}
-foreach ($n in 'CpuText','CpuBar','RamText','RamBar','DiskText','DiskBar','NetText','SessText','SessBar','WeekText','WeekBar','CalPanel','CalPrev','CalTitle','CalNext','CalGrid','Root','MainGrid','BtnUpdate','BtnSettings','BtnHide','FullPanel','MiniPanel','MiniCpuText','MiniCpuBar','MiniRamText','MiniRamBar','MiniSessCell','MiniSessText','MiniSessBar','MiniWeekCell','MiniWeekText','MiniWeekBar','MenuSettings','MenuHide','MenuExit') { $ui[$n] = $win.FindName($n) }
+foreach ($n in 'CpuText','CpuBar','RamText','RamBar','DiskText','DiskBar','NetText','SessText','SessBar','WeekText','WeekBar','CalPanel','CalPrev','CalTitle','CalNext','CalGrid','Root','MainGrid','VerText','MenuVer','BtnUpdate','BtnSettings','BtnHide','FullPanel','MiniPanel','MiniCpuText','MiniCpuBar','MiniRamText','MiniRamBar','MiniSessCell','MiniSessText','MiniSessBar','MiniWeekCell','MiniWeekText','MiniWeekBar','MenuSettings','MenuHide','MenuExit') { $ui[$n] = $win.FindName($n) }
 $ui.MenuExit.Add_Click({ $win.Close() })
 
 function Set-Position {
@@ -278,7 +283,7 @@ function Set-Collapsed([bool]$collapsed) {
     <CheckBox Name="ChkCal" Content="Show calendar" Foreground="White" Margin="0,0,0,8"/>
     <CheckBox Name="ChkClaude" Content="Show Claude usage (5hr / Week)" Foreground="White"/>
     <Rectangle Height="1" Fill="#33FFFFFF" Margin="0,14,0,12"/>
-    <TextBlock Name="VerLabel" Foreground="#9AA0A6" FontSize="12"/>
+    <TextBlock Name="VerLabel" Foreground="#E8EAED" FontSize="13" FontWeight="SemiBold"/>
     <CheckBox Name="ChkUpdate" Content="Check for updates automatically (daily)" Foreground="White" Margin="0,8,0,8"/>
     <CheckBox Name="ChkAutoInstall" Content="Install updates automatically" Foreground="White" Margin="0,0,0,8"/>
     <StackPanel Orientation="Horizontal">
@@ -309,7 +314,8 @@ function Show-Settings {
     })
     $script:setUi.ChkCal.Add_Click({ $settings.ShowCalendar = [bool]$script:setUi.ChkCal.IsChecked; Apply-Settings; Save-Settings })
     $script:setUi.ChkClaude.Add_Click({ $settings.ShowClaude = [bool]$script:setUi.ChkClaude.IsChecked; Apply-Settings; Save-Settings })
-    $script:setUi.VerLabel.Text = "Version $AppVersion"
+    $script:setUi.VerLabel.Text = "System Monitor v$AppVersion"
+    $w.Title = "System Monitor Settings - v$AppVersion"
     $script:setUi.ChkUpdate.IsChecked = [bool]$settings.AutoCheckUpdates
     $script:setUi.ChkUpdate.Add_Click({ $settings.AutoCheckUpdates = [bool]$script:setUi.ChkUpdate.IsChecked; Save-Settings })
     $script:setUi.ChkAutoInstall.IsChecked = [bool]$settings.AutoInstallUpdates
@@ -321,6 +327,11 @@ function Show-Settings {
     $w.Show()
 }
 $ui.MenuSettings.Add_Click({ Show-Settings })
+# version shown in: gadget corner, tooltips, right-click menu (tray + Settings title are set further down)
+$ui.VerText.Text = "v$AppVersion"
+$ui.MenuVer.Header = "System Monitor v$AppVersion"
+$ui.BtnSettings.ToolTip = "Settings (v$AppVersion)"
+$ui.MiniPanel.ToolTip = "Click to expand (v$AppVersion)"
 $ui.BtnUpdate.Text = 'Update'
 $ui.BtnUpdate.Add_MouseLeftButtonUp({ Show-Settings })
 # gear button (top-right of the gadget); U+2699 built in code to keep this file ASCII
@@ -365,8 +376,10 @@ for ($i = 0; $i -lt 3; $i++) {
 $gfx.Dispose()
 $tray = New-Object Windows.Forms.NotifyIcon
 $tray.Icon = [Drawing.Icon]::FromHandle($bmp.GetHicon())
-$tray.Text = 'System Monitor'
+$tray.Text = "System Monitor v$AppVersion"
 $trayMenu = New-Object Windows.Forms.ContextMenuStrip
+$miVer = $trayMenu.Items.Add("System Monitor v$AppVersion"); $miVer.Enabled = $false
+[void]$trayMenu.Items.Add('-')
 $miToggle = $trayMenu.Items.Add('Show / Hide')
 $miSet    = $trayMenu.Items.Add('Settings...')
 $miExit   = $trayMenu.Items.Add('Exit')
