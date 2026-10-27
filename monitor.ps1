@@ -68,12 +68,12 @@ if ($DumpMetrics) {
 # ---- UI ----
 # ---- user settings (saved to %LOCALAPPDATA%\system-monitor\settings.json) ----
 $settingsFile = Join-Path $env:LOCALAPPDATA 'system-monitor\settings.json'
-$AppVersion = '1.2.6'
+$AppVersion = '1.2.7'
 $repoSlug   = 'thekaroe-thailand/system-monitor'
 $settings = @{ Transparency = 25; ShowCalendar = $true; ShowClaude = $true; Collapsed = $false
                AutoCheckUpdates = $true; LastUpdateCheck = 0; LatestTag = ''
                AutoInstallUpdates = $true; LastAutoAttemptTag = ''; LastAutoAttemptAt = 0
-               LiveClaudeUsage = $false }
+               LiveClaudeUsage = $false; OllamaKey = ''; ShowOllama = $true }   # OllamaKey is DPAPI-encrypted (ConvertFrom-SecureString)
 if (Test-Path $settingsFile) {
     try {
         $saved = Get-Content $settingsFile -Raw | ConvertFrom-Json
@@ -115,10 +115,9 @@ function Save-Settings {
                  ToolTip="Collapse" Padding="4,0"/>
     </StackPanel>
     </Grid>
-    <Grid Name="MainGrid" Height="176">
+    <Grid Name="MainGrid" Height="117">
       <Grid.RowDefinitions>
         <RowDefinition Height="*"/><RowDefinition Height="*"/><RowDefinition Height="*"/><RowDefinition Height="*"/>
-        <RowDefinition Height="*"/><RowDefinition Height="*"/>
       </Grid.RowDefinitions>
       <Grid.ColumnDefinitions>
         <ColumnDefinition Width="42"/><ColumnDefinition Width="*"/>
@@ -141,17 +140,8 @@ function Save-Settings {
       <TextBlock Grid.Row="3" Foreground="#9AA0A6" FontSize="12" Text="Net" VerticalAlignment="Center"/>
       <TextBlock Grid.Row="3" Grid.Column="1" Name="NetText" Foreground="White" FontSize="11"
                  HorizontalAlignment="Right" VerticalAlignment="Center"/>
-      <TextBlock Grid.Row="4" Foreground="#9AA0A6" FontSize="12" Text="5hr" VerticalAlignment="Center"/>
-      <StackPanel Grid.Row="4" Grid.Column="1" VerticalAlignment="Center">
-        <TextBlock Name="SessText" Foreground="White" FontSize="12" HorizontalAlignment="Right"/>
-        <ProgressBar Name="SessBar" Height="4" Maximum="100" Foreground="#26A69A" Background="#33FFFFFF" BorderThickness="0"/>
-      </StackPanel>
-      <TextBlock Grid.Row="5" Foreground="#9AA0A6" FontSize="12" Text="Week" VerticalAlignment="Center"/>
-      <StackPanel Grid.Row="5" Grid.Column="1" VerticalAlignment="Center">
-        <TextBlock Name="WeekText" Foreground="White" FontSize="12" HorizontalAlignment="Right"/>
-        <ProgressBar Name="WeekBar" Height="4" Maximum="100" Foreground="#26A69A" Background="#33FFFFFF" BorderThickness="0"/>
-      </StackPanel>
     </Grid>
+    <StackPanel Name="UsagePanel"/>
     <StackPanel Name="CalPanel" Margin="0,8,0,0">
       <Rectangle Height="1" Fill="#33FFFFFF" Margin="0,0,0,6"/>
       <Grid>
@@ -163,26 +153,19 @@ function Save-Settings {
     </StackPanel>
     </StackPanel>
     <Grid Name="MiniPanel" Visibility="Collapsed" Background="Transparent" Cursor="Hand" ToolTip="Click to expand">
-      <Grid VerticalAlignment="Center" Margin="0,2,16,2">
+      <StackPanel Name="MiniStack" VerticalAlignment="Center" Margin="0,2,16,2">
+      <Grid>
         <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
-        <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
-        <StackPanel Grid.Row="0" Grid.Column="0" Margin="0,0,8,0">
+        <StackPanel Grid.Column="0" Margin="0,0,8,0">
           <TextBlock Name="MiniCpuText" Foreground="White" FontSize="11"/>
           <ProgressBar Name="MiniCpuBar" Height="4" Maximum="100" Foreground="#4FC3F7" Background="#33FFFFFF" BorderThickness="0" Margin="0,2,0,0"/>
         </StackPanel>
-        <StackPanel Grid.Row="0" Grid.Column="1">
+        <StackPanel Grid.Column="1">
           <TextBlock Name="MiniRamText" Foreground="White" FontSize="11"/>
           <ProgressBar Name="MiniRamBar" Height="4" Maximum="100" Foreground="#81C784" Background="#33FFFFFF" BorderThickness="0" Margin="0,2,0,0"/>
         </StackPanel>
-        <StackPanel Name="MiniSessCell" Grid.Row="1" Grid.Column="0" Margin="0,6,8,0">
-          <TextBlock Name="MiniSessText" Foreground="White" FontSize="11"/>
-          <ProgressBar Name="MiniSessBar" Height="4" Maximum="100" Foreground="#26A69A" Background="#33FFFFFF" BorderThickness="0" Margin="0,2,0,0"/>
-        </StackPanel>
-        <StackPanel Name="MiniWeekCell" Grid.Row="1" Grid.Column="1" Margin="0,6,0,0">
-          <TextBlock Name="MiniWeekText" Foreground="White" FontSize="11"/>
-          <ProgressBar Name="MiniWeekBar" Height="4" Maximum="100" Foreground="#26A69A" Background="#33FFFFFF" BorderThickness="0" Margin="0,2,0,0"/>
-        </StackPanel>
       </Grid>
+      </StackPanel>
       <TextBlock Name="MiniPlus" Foreground="#9AA0A6" FontFamily="Segoe UI Symbol" FontSize="13" Text="+"
                  HorizontalAlignment="Right" VerticalAlignment="Center" Padding="4,0"/>
     </Grid>
@@ -193,8 +176,74 @@ function Save-Settings {
 
 $win = [Windows.Markup.XamlReader]::Load((New-Object Xml.XmlNodeReader $xaml))
 $ui = @{}
-foreach ($n in 'CpuText','CpuBar','RamText','RamBar','DiskText','DiskBar','NetText','SessText','SessBar','WeekText','WeekBar','CalPanel','CalPrev','CalTitle','CalNext','CalGrid','Root','MainGrid','VerText','MenuVer','BtnUpdate','BtnSettings','BtnHide','FullPanel','MiniPanel','MiniCpuText','MiniCpuBar','MiniRamText','MiniRamBar','MiniSessCell','MiniSessText','MiniSessBar','MiniWeekCell','MiniWeekText','MiniWeekBar','MenuSettings','MenuHide','MenuExit') { $ui[$n] = $win.FindName($n) }
+foreach ($n in 'CpuText','CpuBar','RamText','RamBar','DiskText','DiskBar','NetText','CalPanel','CalPrev','CalTitle','CalNext','CalGrid','Root','MainGrid','VerText','MenuVer','BtnUpdate','BtnSettings','BtnHide','FullPanel','MiniPanel','MiniStack','MiniCpuText','MiniCpuBar','MiniRamText','MiniRamBar','MenuSettings','MenuHide','MenuExit','UsagePanel') { $ui[$n] = $win.FindName($n) }
 $ui.MenuExit.Add_Click({ $win.Close() })
+
+# ---- usage sections: one group per AI provider, built from the same template ----
+# Full gadget: divider, colored dot + title, a small note on the right, then two usage rows.
+# Collapsed bar: one line per provider with the same colored dots. Add a provider with New-UsageSection.
+$sectionXaml = @'
+<StackPanel xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" Margin="0,8,0,0">
+  <Rectangle Height="1" Fill="#33FFFFFF" Margin="0,0,0,5"/>
+  <Grid>
+    <StackPanel Orientation="Horizontal">
+      <Ellipse Width="7" Height="7" Fill="{ACCENT}" VerticalAlignment="Center" Margin="0,1,6,0"/>
+      <TextBlock Text="{TITLE}" Foreground="#E8EAED" FontSize="11" FontWeight="SemiBold"/>
+    </StackPanel>
+    <TextBlock Name="Note" Foreground="#9AA0A6" FontSize="10" HorizontalAlignment="Right" VerticalAlignment="Center"/>
+  </Grid>
+  <Grid Height="29">
+    <Grid.ColumnDefinitions><ColumnDefinition Width="42"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+    <TextBlock Name="Lbl1" Foreground="#9AA0A6" FontSize="12" Text="5hr" VerticalAlignment="Center"/>
+    <StackPanel Grid.Column="1" VerticalAlignment="Center">
+      <TextBlock Name="Text1" Foreground="White" FontSize="12" HorizontalAlignment="Right"/>
+      <ProgressBar Name="Bar1" Height="4" Maximum="100" Foreground="#26A69A" Background="#33FFFFFF" BorderThickness="0"/>
+    </StackPanel>
+  </Grid>
+  <Grid Name="Row2" Height="29">
+    <Grid.ColumnDefinitions><ColumnDefinition Width="42"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+    <TextBlock Name="Lbl2" Foreground="#9AA0A6" FontSize="12" Text="Week" VerticalAlignment="Center"/>
+    <StackPanel Grid.Column="1" VerticalAlignment="Center">
+      <TextBlock Name="Text2" Foreground="White" FontSize="12" HorizontalAlignment="Right"/>
+      <ProgressBar Name="Bar2" Height="4" Maximum="100" Foreground="#26A69A" Background="#33FFFFFF" BorderThickness="0"/>
+    </StackPanel>
+  </Grid>
+</StackPanel>
+'@
+$miniXaml = @'
+<Grid xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" Margin="0,6,0,0" ToolTip="{TITLE} - click to expand">
+  <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+  <StackPanel Margin="0,0,8,0">
+    <StackPanel Orientation="Horizontal">
+      <Ellipse Width="6" Height="6" Fill="{ACCENT}" VerticalAlignment="Center" Margin="0,1,4,0"/>
+      <TextBlock Name="Text1" Foreground="White" FontSize="11"/>
+    </StackPanel>
+    <ProgressBar Name="Bar1" Height="4" Maximum="100" Foreground="#26A69A" Background="#33FFFFFF" BorderThickness="0" Margin="0,2,0,0"/>
+  </StackPanel>
+  <StackPanel Name="Cell2" Grid.Column="1">
+    <StackPanel Orientation="Horizontal">
+      <Ellipse Width="6" Height="6" Fill="{ACCENT}" VerticalAlignment="Center" Margin="0,1,4,0"/>
+      <TextBlock Name="Text2" Foreground="White" FontSize="11"/>
+    </StackPanel>
+    <ProgressBar Name="Bar2" Height="4" Maximum="100" Foreground="#26A69A" Background="#33FFFFFF" BorderThickness="0" Margin="0,2,0,0"/>
+  </StackPanel>
+</Grid>
+'@
+
+function New-UsageSection([string]$title, [string]$accent) {
+    $t = [Security.SecurityElement]::Escape($title)
+    $full = [Windows.Markup.XamlReader]::Parse($sectionXaml.Replace('{TITLE}', $t).Replace('{ACCENT}', $accent))
+    $mini = [Windows.Markup.XamlReader]::Parse($miniXaml.Replace('{TITLE}', $t).Replace('{ACCENT}', $accent))
+    [void]$ui.UsagePanel.Children.Add($full)
+    [void]$ui.MiniStack.Children.Add($mini)
+    $s = @{ Panel = $full; Mini = $mini }
+    foreach ($n in 'Note','Lbl1','Text1','Bar1','Row2','Lbl2','Text2','Bar2') { $s[$n] = $full.FindName($n) }
+    foreach ($n in 'Text1','Bar1','Cell2','Text2','Bar2') { $s["Mini$n"] = $mini.FindName($n) }
+    $s
+}
+
+$claudeSec = New-UsageSection 'Claude' '#D97757'
+$ollamaSec = New-UsageSection 'Ollama Cloud' '#B0BEC5'
 
 function Set-Position {
     $wa = [Windows.SystemParameters]::WorkArea
@@ -250,19 +299,14 @@ function Apply-Settings {
     $alpha = [byte][math]::Round((100 - $settings.Transparency) / 100 * 255)
     $ui.Root.Background = New-Object Windows.Media.SolidColorBrush ([Windows.Media.Color]::FromArgb($alpha, 0x18, 0x18, 0x18))
     $ui.CalPanel.Visibility = if ($settings.ShowCalendar) { 'Visible' } else { 'Collapsed' }
-    # rows 4-5 of the main grid are the Claude usage rows; collapse them and shrink the grid to match
-    $showClaude = [bool]$settings.ShowClaude
-    $vis = if ($showClaude) { 'Visible' } else { 'Collapsed' }
-    foreach ($c in $ui.MainGrid.Children) { if ([Windows.Controls.Grid]::GetRow($c) -ge 4) { $c.Visibility = $vis } }
-    foreach ($i in 4, 5) {
-        $ui.MainGrid.RowDefinitions[$i].Height = if ($showClaude) { [Windows.GridLength]::new(1, [Windows.GridUnitType]::Star) } else { [Windows.GridLength]::new(0) }
-    }
-    $ui.MainGrid.Height = 176 / 6 * $(if ($showClaude) { 6 } else { 4 })
-    # collapsed = small one-line bar (CPU / RAM) instead of the full gadget
+    # collapsed = small bar (CPU / RAM + one line per provider) instead of the full gadget
     $ui.FullPanel.Visibility = if ($settings.Collapsed) { 'Collapsed' } else { 'Visible' }
     $ui.MiniPanel.Visibility = if ($settings.Collapsed) { 'Visible' } else { 'Collapsed' }
-    $ui.MiniSessCell.Visibility = $vis
-    $ui.MiniWeekCell.Visibility = $vis
+    $vis = if ($settings.ShowClaude) { 'Visible' } else { 'Collapsed' }
+    $claudeSec.Panel.Visibility = $vis; $claudeSec.Mini.Visibility = $vis
+    # Ollama Cloud appears once a key is connected (its second row is hidden again for monthly plans)
+    $vis = if ($settings.OllamaKey -and $settings.ShowOllama) { 'Visible' } else { 'Collapsed' }
+    $ollamaSec.Panel.Visibility = $vis; $ollamaSec.Mini.Visibility = $vis
 }
 
 function Set-Collapsed([bool]$collapsed) {
@@ -281,11 +325,32 @@ function Set-Collapsed([bool]$collapsed) {
     <TextBlock Name="TransLabel" Foreground="White" FontSize="13"/>
     <Slider Name="TransSlider" Minimum="0" Maximum="90" TickFrequency="5" IsSnapToTickEnabled="True" Margin="0,6,0,2"/>
     <TextBlock Text="0% = solid, higher = more see-through" Foreground="#9AA0A6" FontSize="11" Margin="0,0,0,14"/>
-    <CheckBox Name="ChkCal" Content="Show calendar" Foreground="White" Margin="0,0,0,8"/>
+    <CheckBox Name="ChkCal" Content="Show calendar" Foreground="White"/>
+    <Rectangle Height="1" Fill="#33FFFFFF" Margin="0,14,0,12"/>
+    <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
+      <Ellipse Width="8" Height="8" Fill="#D97757" VerticalAlignment="Center" Margin="0,1,7,0"/>
+      <TextBlock Text="Claude" Foreground="#E8EAED" FontSize="13" FontWeight="SemiBold"/>
+    </StackPanel>
     <CheckBox Name="ChkClaude" Content="Show Claude usage (5hr / Week)" Foreground="White"/>
-    <CheckBox Name="ChkLive" Content="Live Claude usage (uses your Claude login)" Foreground="White" Margin="0,8,0,0"/>
+    <CheckBox Name="ChkLive" Content="Live usage (uses your Claude login)" Foreground="White" Margin="0,8,0,0"/>
     <TextBlock Text="Off by default. Reads the login token in ~\.claude\.credentials.json (read-only) and asks api.anthropic.com every 2 minutes, so the numbers match Claude even when you only use VS Code. Unofficial endpoint: it may stop working."
                Foreground="#6B7075" FontSize="10" TextWrapping="Wrap" Margin="22,2,0,0"/>
+    <Rectangle Height="1" Fill="#33FFFFFF" Margin="0,14,0,12"/>
+    <StackPanel Orientation="Horizontal">
+      <Ellipse Width="8" Height="8" Fill="#B0BEC5" VerticalAlignment="Center" Margin="0,1,7,0"/>
+      <TextBlock Text="Ollama Cloud" Foreground="#E8EAED" FontSize="13" FontWeight="SemiBold"/>
+    </StackPanel>
+    <CheckBox Name="ChkOllama" Content="Show Ollama Cloud usage" Foreground="White" Margin="0,8,0,0"/>
+    <TextBlock Foreground="#9AA0A6" FontSize="11" TextWrapping="Wrap" Margin="0,4,0,6">Paste an API key from
+      <Hyperlink Name="OlKeyLink" Foreground="#4FC3F7">ollama.com/settings/keys</Hyperlink> to show your Ollama Cloud usage.</TextBlock>
+    <PasswordBox Name="OlKeyBox" Padding="3,2"/>
+    <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
+      <Button Name="BtnOlConnect" Content="Connect" Padding="10,3"/>
+      <Button Name="BtnOlDisconnect" Content="Disconnect" Padding="10,3" Margin="8,0,0,0"/>
+    </StackPanel>
+    <TextBlock Name="OlStatus" Foreground="#9AA0A6" FontSize="11" Margin="0,8,0,0" TextWrapping="Wrap"/>
+    <TextBlock Text="The key is stored encrypted for your Windows account and is only sent to ollama.com (checked once a minute)."
+               Foreground="#6B7075" FontSize="10" TextWrapping="Wrap" Margin="0,4,0,0"/>
     <Rectangle Height="1" Fill="#33FFFFFF" Margin="0,14,0,12"/>
     <TextBlock Name="VerLabel" Foreground="#E8EAED" FontSize="13" FontWeight="SemiBold"/>
     <CheckBox Name="ChkUpdate" Content="Check for updates automatically (daily)" Foreground="White" Margin="0,8,0,8"/>
@@ -306,7 +371,8 @@ function Show-Settings {
     if ($script:setWin) { [void]$script:setWin.Activate(); return }
     $w = [Windows.Markup.XamlReader]::Load((New-Object Xml.XmlNodeReader $setXaml))
     $script:setWin = $w
-    foreach ($n in 'TransLabel','TransSlider','ChkCal','ChkClaude','ChkLive','VerLabel','ChkUpdate','ChkAutoInstall','BtnCheck','BtnDoUpdate','UpdStatus') { $script:setUi[$n] = $w.FindName($n) }
+    foreach ($n in 'TransLabel','TransSlider','ChkCal','ChkClaude','ChkLive','VerLabel','ChkUpdate','ChkAutoInstall','BtnCheck','BtnDoUpdate','UpdStatus',
+                'ChkOllama','OlKeyLink','OlKeyBox','BtnOlConnect','BtnOlDisconnect','OlStatus') { $script:setUi[$n] = $w.FindName($n) }
     $script:setUi.TransSlider.Value = $settings.Transparency
     $script:setUi.TransLabel.Text = 'Transparency: {0}%' -f $settings.Transparency
     $script:setUi.ChkCal.IsChecked = [bool]$settings.ShowCalendar
@@ -328,7 +394,15 @@ function Show-Settings {
     $script:setUi.ChkAutoInstall.Add_Click({ $settings.AutoInstallUpdates = [bool]$script:setUi.ChkAutoInstall.IsChecked; Save-Settings })
     $script:setUi.BtnCheck.Add_Click({ Start-UpdateCheck })
     $script:setUi.BtnDoUpdate.Add_Click({ Start-Update })
+    $script:setUi.ChkOllama.IsChecked = [bool]$settings.ShowOllama
+    # hidden = no requests to ollama.com either; showing it again refreshes right away
+    $script:setUi.ChkOllama.Add_Click({ $settings.ShowOllama = [bool]$script:setUi.ChkOllama.IsChecked; $olState.NextAt = 0; Apply-Settings; Save-Settings; Refresh-OllamaUi })
+    $script:setUi.OlKeyLink.Add_Click({ Start-Process 'https://ollama.com/settings/keys' })
+    $script:setUi.BtnOlConnect.Add_Click({ Connect-Ollama $script:setUi.OlKeyBox.Password })
+    $script:setUi.OlKeyBox.Add_KeyDown({ param($s, $e) if ($e.Key -eq 'Return') { Connect-Ollama $script:setUi.OlKeyBox.Password } })
+    $script:setUi.BtnOlDisconnect.Add_Click({ Disconnect-Ollama })
     Refresh-UpdateUi
+    Refresh-OllamaUi
     $w.Add_Closed({ $script:setWin = $null })
     $w.Show()
 }
@@ -452,13 +526,14 @@ function Format-Age([double]$sec) {
     else { '{0}m' -f [int][math]::Floor($sec / 60) }
 }
 
-function Set-UsageRow($limit, $text, $bar, [double]$ageSec) {
+function Set-UsageRow($limit, $text, $bar, [double]$ageSec, [string]$emptyText = '') {
     $now = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
     $reset = if ($limit) { [double]$limit.resets_at } else { 0 }
     if ($reset -gt 1e11) { $reset = $reset / 1000 }
     if (-not $limit -or $reset -le $now) {
         # no usable data: with Live off, point at the setting instead of a bare "--"
-        if ($settings.LiveClaudeUsage) { $text.Text = '--' } else { $text.Text = 'Live off - see Settings'; $text.Foreground = $calDim }
+        if ($emptyText) { $text.Text = $emptyText; $text.Foreground = $calDim }
+        elseif ($settings.LiveClaudeUsage) { $text.Text = '--' } else { $text.Text = 'Live off - see Settings'; $text.Foreground = $calDim }
         $bar.Value = 0; return
     }
     $pct = [math]::Round([double]$limit.used_percentage, 0)
@@ -632,8 +707,156 @@ function Update-LivePoll {
     }
 }
 
+# ---- Ollama Cloud usage (opt-in: connected with an API key in Settings) ----
+# Documented endpoint GET https://ollama.com/api/balance (limit 10 req/min, once a minute recommended).
+# Older plans report session + weekly limits (remaining_percent 0-100); newer plans a monthly USD allowance.
+$ollamaUrl = 'https://ollama.com/api/balance'
+$olState   = @{ Task = $null; NextAt = 0; Data = $null; Stamp = 0; Error = '' }
+
+function Get-OllamaKey {
+    if (-not $settings.OllamaKey) { return $null }
+    try {
+        $p = [Runtime.InteropServices.Marshal]::SecureStringToBSTR((ConvertTo-SecureString ([string]$settings.OllamaKey)))
+        try { return [Runtime.InteropServices.Marshal]::PtrToStringBSTR($p) } finally { [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($p) }
+    } catch { return $null }   # e.g. settings copied from another Windows account
+}
+
+function Connect-Ollama([string]$key) {
+    $key = $key.Trim()
+    if ($key -notmatch '^[\x21-\x7E]{8,}$') {   # printable, no spaces: it goes into an HTTP header
+        if ($script:setWin) { $script:setUi.OlStatus.Text = 'Paste the whole API key first.' }
+        return
+    }
+    $settings.OllamaKey = ConvertTo-SecureString $key -AsPlainText -Force | ConvertFrom-SecureString
+    $settings.ShowOllama = $true   # connecting means "show it"
+    if ($script:setWin) { $script:setUi.ChkOllama.IsChecked = $true }
+    Save-Settings
+    $olState.Data = $null; $olState.Error = ''; $olState.NextAt = 0; $olState.Task = $null   # ignore a reply for the old key
+    if ($script:setWin) { $script:setUi.OlKeyBox.Clear() }
+    Apply-Settings
+    Update-OllamaPoll
+    Refresh-OllamaUi
+}
+
+function Disconnect-Ollama {
+    $settings.OllamaKey = ''
+    Save-Settings
+    $olState.Data = $null; $olState.Error = ''; $olState.Task = $null
+    Apply-Settings
+    Refresh-OllamaUi
+}
+
+function Refresh-OllamaUi {
+    if (-not $script:setWin) { return }
+    $s = $script:setUi
+    $s.BtnOlDisconnect.IsEnabled = [bool]$settings.OllamaKey
+    $s.BtnOlConnect.Content = if ($settings.OllamaKey) { 'Change key' } else { 'Connect' }
+    $d = $olState.Data
+    $hint = switch ($olState.Error) {
+        'Invalid key'      { ' - paste a new key and press Change key.' }
+        'Key unreadable'   { ' (saved under another Windows account) - paste the key again.' }
+        'Offline'          { ' - could not reach ollama.com, retrying in 5 minutes.' }
+        'Unexpected reply' { ' from ollama.com - the API may have changed.' }
+        default            { '' }
+    }
+    $s.OlStatus.Text =
+        if (-not $settings.OllamaKey) { 'Not connected.' }
+        elseif (-not $settings.ShowOllama) { 'Connected, hidden in the gadget (not checking usage).' }
+        elseif ($olState.Error -and $d) { "$($olState.Error)$hint Showing the last numbers." }
+        elseif ($olState.Error) { "$($olState.Error)$hint" }
+        elseif (-not $d) { 'Connecting...' }
+        elseif ($d.Kind -eq 'monthly') { 'Connected. ${0:N2} of ${1:N2} included credits used this month.' -f $d.Monthly.UsedUsd, $d.Monthly.AllowanceUsd }
+        else { 'Connected. Session {0:N0}% used, weekly {1:N0}% used.' -f $d.Session.used_percentage, $d.Weekly.used_percentage }
+}
+
+function Start-OllamaUsage {
+    if ($olState.Task) { return }
+    $key = Get-OllamaKey
+    if (-not $key) { $olState.Error = 'Key unreadable'; return }
+    [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+    $wc = New-Object Net.WebClient
+    $wc.Headers.Add('Authorization', "Bearer $key")
+    $wc.Headers.Add('User-Agent', 'system-monitor-gadget')
+    $olState.Task = $wc.DownloadStringTaskAsync($ollamaUrl)
+}
+
+function Convert-OllamaLimit($x) {
+    if (-not $x) { return $null }
+    [pscustomobject]@{ used_percentage = [math]::Min(100, [math]::Max(0, 100 - [double]$x.remaining_percent)); resets_at = (Convert-ToEpoch $x.resets_at) }
+}
+
+function Update-OllamaPoll {
+    if (-not ($settings.OllamaKey -and $settings.ShowOllama)) { return }
+    $now = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
+    if (-not $olState.Task -and $now -ge $olState.NextAt) { $olState.NextAt = $now + 60; Start-OllamaUsage }
+    $t = $olState.Task
+    if (-not ($t -and $t.IsCompleted)) { return }
+    $olState.Task = $null
+    if ($t.IsFaulted -or $t.IsCanceled) {
+        $code = 0; $retry = 0
+        $we = if ($t.Exception) { $t.Exception.InnerException } else { $null }
+        if ($we -is [Net.WebException] -and $we.Response) {
+            $code = [int]$we.Response.StatusCode
+            [void][int]::TryParse([string]$we.Response.Headers['Retry-After'], [ref]$retry)
+        }
+        # short: these show in the gadget row; Refresh-OllamaUi adds hints in Settings
+        $olState.Error = switch ($code) {
+            0       { 'Offline' }
+            401     { 'Invalid key' }
+            403     { 'Account suspended' }
+            429     { 'Too many requests' }
+            503     { 'Unavailable' }
+            default { "Error $code" }
+        }
+        # a wrong key won't fix itself: drop old numbers and stop asking often
+        if ($code -eq 401 -or $code -eq 403) { $olState.Data = $null; $olState.NextAt = $now + 1800 }
+        elseif ($code -eq 429 -and $retry -gt 0) { $olState.NextAt = $now + [math]::Max(60, $retry) }
+        else { $olState.NextAt = $now + 300 }
+    } else {
+        try {
+            $j = $t.Result | ConvertFrom-Json
+            $inc = $j.included
+            $purchased = if ($j.purchased -and $null -ne $j.purchased.balance_usd) { [double]$j.purchased.balance_usd } else { 0 }
+            if ($inc.session -or $inc.weekly) {
+                $d = [pscustomobject]@{ Kind = 'window'; Session = (Convert-OllamaLimit $inc.session); Weekly = (Convert-OllamaLimit $inc.weekly); Purchased = $purchased }
+            } elseif ($null -ne $inc.allowance_usd) {
+                $allow = [double]$inc.allowance_usd; $used = [math]::Max(0, $allow - [double]$inc.balance_usd)
+                $pct = if ($allow -gt 0) { [math]::Min(100, $used / $allow * 100) } else { 0 }
+                $m = [pscustomobject]@{ used_percentage = $pct; resets_at = (Convert-ToEpoch $inc.period.until); UsedUsd = $used; AllowanceUsd = $allow }
+                $d = [pscustomobject]@{ Kind = 'monthly'; Monthly = $m; Purchased = $purchased }
+            } else { throw 'unknown shape' }
+            $olState.Data = $d; $olState.Stamp = $now; $olState.Error = ''
+        } catch { $olState.Error = 'Unexpected reply'; $olState.NextAt = $now + 300 }
+    }
+    Refresh-OllamaUi
+}
+
+function Update-OllamaRows {
+    if (-not ($settings.OllamaKey -and $settings.ShowOllama)) { return }
+    $d = $olState.Data
+    $age = if ($d) { [DateTimeOffset]::UtcNow.ToUnixTimeSeconds() - $olState.Stamp } else { 0 }
+    $empty = if ($olState.Error) { $olState.Error } else { 'Connecting...' }
+    $monthly = $d -and $d.Kind -eq 'monthly'
+    $r1 = if ($monthly) { $d.Monthly } elseif ($d) { $d.Session } else { $null }
+    $r2 = if ($d -and -not $monthly) { $d.Weekly } else { $null }
+    $s = $ollamaSec
+    $s.Lbl1.Text = if ($monthly) { 'Month' } else { '5hr' }
+    $s.Row2.Visibility = if ($monthly) { 'Collapsed' } else { 'Visible' }
+    $s.MiniCell2.Visibility = $s.Row2.Visibility
+    Set-UsageRow $r1 $s.Text1 $s.Bar1 $age $empty
+    Set-UsageRow $r2 $s.Text2 $s.Bar2 $age $empty
+    Set-MiniUsage $r1 $s.Lbl1.Text $s.MiniText1 $s.MiniBar1 $age
+    Set-MiniUsage $r2 'Week' $s.MiniText2 $s.MiniBar2 $age
+    $s.Note.Text = if ($d -and $d.Purchased -gt 0) { '+${0:N2} credits' -f $d.Purchased } else { '' }
+    $tip = if ($monthly) { 'Ollama Cloud: ${0:N2} of ${1:N2} included credits used this month.' -f $d.Monthly.UsedUsd, $d.Monthly.AllowanceUsd }
+           else { 'Ollama Cloud session (5hr) and weekly limits.' }
+    $tip += if ($olState.Error) { " $($olState.Error) - see Settings." } else { ' Refreshed every minute.' }
+    $s.Text1.ToolTip = $tip; $s.Text2.ToolTip = $tip
+}
+
 $update = {
     Update-Poll
+    Update-OllamaPoll   # before the hidden check so the Settings status still updates while the gadget is hidden
     # hidden: skip work, and don't call SetWindowPos below (its SHOWWINDOW flag would re-show the window)
     if ($win.Visibility -ne 'Visible') { return }
     Update-LivePoll
@@ -643,18 +866,23 @@ $update = {
     $fh = if ($rl) { $rl.five_hour } else { $null }
     $sd = if ($rl) { $rl.seven_day } else { $null }
     $age = if ($usageState.Data -and $usageState.Data.updatedAt) { [DateTimeOffset]::UtcNow.ToUnixTimeSeconds() - [double]$usageState.Data.updatedAt } else { 0 }
+    $isLive = $false
     if ($settings.LiveClaudeUsage -and $liveState.Data) {   # fresh live numbers win over the CLI file
         $liveAge = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds() - $liveState.Stamp
-        if ($liveAge -lt 600) { $fh = $liveState.Data.five_hour; $sd = $liveState.Data.seven_day; $age = $liveAge }
+        if ($liveAge -lt 600) { $fh = $liveState.Data.five_hour; $sd = $liveState.Data.seven_day; $age = $liveAge; $isLive = $true }
     }
-    Set-UsageRow $fh $ui.SessText $ui.SessBar $age
-    Set-UsageRow $sd $ui.WeekText $ui.WeekBar $age
+    $s = $claudeSec
+    Set-UsageRow $fh $s.Text1 $s.Bar1 $age
+    Set-UsageRow $sd $s.Text2 $s.Bar2 $age
+    # where the numbers come from (blank while the first live request is still running)
+    $s.Note.Text = if ($isLive) { 'live' } elseif (-not $settings.LiveClaudeUsage) { 'CLI' } elseif ($liveState.Error) { 'CLI (live failed)' } else { '' }
     $usageTip = if (-not $settings.LiveClaudeUsage) { 'Live Claude usage is off: these numbers only update while you use the Claude CLI. Turn it on in Settings (gear).' }
                 elseif ($liveState.Error) { "Live Claude usage: $($liveState.Error) - showing the last CLI numbers." }
                 else { 'Live Claude usage (refreshed every 2 minutes).' }
-    $ui.SessText.ToolTip = $usageTip; $ui.WeekText.ToolTip = $usageTip
-    Set-MiniUsage $fh '5hr' $ui.MiniSessText $ui.MiniSessBar $age
-    Set-MiniUsage $sd 'Week' $ui.MiniWeekText $ui.MiniWeekBar $age
+    $s.Text1.ToolTip = $usageTip; $s.Text2.ToolTip = $usageTip; $s.Note.ToolTip = $usageTip
+    Set-MiniUsage $fh '5hr' $s.MiniText1 $s.MiniBar1 $age
+    Set-MiniUsage $sd 'Week' $s.MiniText2 $s.MiniBar2 $age
+    Update-OllamaRows
     $m = Get-Metrics
     $ui.MiniCpuText.Text = 'CPU {0}%' -f $m.Cpu
     $ui.MiniCpuBar.Value = $m.Cpu
