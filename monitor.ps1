@@ -68,7 +68,7 @@ if ($DumpMetrics) {
 # ---- UI ----
 # ---- user settings (saved to %LOCALAPPDATA%\system-monitor\settings.json) ----
 $settingsFile = Join-Path $env:LOCALAPPDATA 'system-monitor\settings.json'
-$AppVersion = '1.2.1'
+$AppVersion = '1.2.3'
 $repoSlug   = 'thekaroe-thailand/system-monitor'
 $settings = @{ Transparency = 25; ShowCalendar = $true; ShowClaude = $true; Collapsed = $false
                AutoCheckUpdates = $true; LastUpdateCheck = 0; LatestTag = ''
@@ -519,11 +519,21 @@ function Update-Poll {
 }
 
 # the installer is run from the NEW tag; SM_CLAUDE_USAGE=skip keeps it from re-asking the Claude question
+$updateLog = Join-Path $env:LOCALAPPDATA 'system-monitor\update.log'
+function Write-UpdateLog([string]$msg) {
+    try {
+        New-Item -ItemType Directory -Force (Split-Path $updateLog) | Out-Null
+        Add-Content -Path $updateLog -Value ('{0}  {1}' -f (Get-Date -Format 's'), $msg)
+    } catch { }
+}
+
+# The installer runs in a visible console for a few seconds: security software blocks a hidden
+# powershell window that runs "irm | iex" (it looks like malware), so hiding it makes the update fail.
 function Get-UpdateArgs {
     if (([string]$settings.LatestTag) -notmatch '^v\d+\.\d+\.\d+$') { return $null }
     $url = "https://raw.githubusercontent.com/$repoSlug/$($settings.LatestTag)/install.ps1"
-    $cmd = "`$env:SM_CLAUDE_USAGE='skip'; irm '$url' | iex"
-    @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-WindowStyle', 'Hidden', '-Command', $cmd)
+    $cmd = "`$env:SM_CLAUDE_USAGE = 'skip'; irm '$url' | iex"
+    @('-NoProfile', '-Command', $cmd)
 }
 
 function Start-Update {
@@ -531,7 +541,16 @@ function Start-Update {
     $updateArgs = Get-UpdateArgs
     if (-not $updateArgs) { return }
     $updateState.Updating = $true
-    Start-Process powershell.exe -ArgumentList $updateArgs
+    try {
+        Start-Process powershell.exe -ArgumentList $updateArgs
+        Write-UpdateLog "started installer for $($settings.LatestTag)"
+    } catch {
+        $updateState.Updating = $false
+        $updateState.Error = "Could not start the update: $($_.Exception.Message)"
+        Write-UpdateLog $updateState.Error
+        Refresh-UpdateUi
+        return
+    }
     if ($script:setWin) { $script:setUi.UpdStatus.Text = 'Updating... the gadget will restart in a few seconds.'; $script:setUi.BtnDoUpdate.IsEnabled = $false }
 }
 
