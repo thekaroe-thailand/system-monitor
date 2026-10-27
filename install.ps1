@@ -1,10 +1,10 @@
 # system-monitor installer. One-liner (run in cmd or PowerShell):
-#   powershell -NoProfile -Command "irm https://raw.githubusercontent.com/thekaroe-thailand/system-monitor/v1.2.7/install.ps1 | iex"
+#   powershell -NoProfile -Command "irm https://raw.githubusercontent.com/thekaroe-thailand/system-monitor/v1.3.0/install.ps1 | iex"
 # Re-running it installs/updates to the version pinned in $ref below (the gadget also checks for updates itself, daily).
 # NOTE: keep this file ASCII-only (Windows PowerShell 5.1 reads BOM-less files as ANSI).
 $ErrorActionPreference = 'Stop'
 $repo       = 'thekaroe-thailand/system-monitor'
-$ref        = 'v1.2.7'
+$ref        = 'v1.3.0'
 $installDir = Join-Path $env:LOCALAPPDATA 'Programs\system-monitor'
 $files      = 'monitor.ps1', 'start-monitor.vbs', 'claude-usage-hook.ps1', 'uninstall.ps1', 'README.md'
 

@@ -65,8 +65,8 @@
       <button class="copy" type="button" data-copy="cmd-install"><span class="th">Copy</span><span class="en">Copy</span></button>
     </div>
     <p class="muted">
-      <span class="th">เวอร์ชันล่าสุด: <b class="ver">v1.2.7</b> · ต้องใช้ Windows 10 / 11 · ไม่ต้องใช้สิทธิ์ admin · ไม่ต้องลงโปรแกรมเพิ่ม</span>
-      <span class="en">Latest version: <b class="ver">v1.2.7</b> · Windows 10 / 11 · no admin rights · nothing else to install</span>
+      <span class="th">เวอร์ชันล่าสุด: <b class="ver">v1.3.0</b> · ต้องใช้ Windows 10 / 11 · ไม่ต้องใช้สิทธิ์ admin · ไม่ต้องลงโปรแกรมเพิ่ม</span>
+      <span class="en">Latest version: <b class="ver">v1.3.0</b> · Windows 10 / 11 · no admin rights · nothing else to install</span>
     </p>
   </section>
 
@@ -88,6 +88,8 @@
       <li><span class="th">ถ้าตอบ <code>y</code> ในคำถาม Claude จะมีการเพิ่ม <code>statusLine</code> ใน <code>~\.claude\settings.json</code> (สำรองไฟล์เดิมไว้ให้)</span><span class="en">If you answer <code>y</code> to the Claude question, a <code>statusLine</code> entry is added to <code>~\.claude\settings.json</code> (your original is backed up).</span></li>
       <li><span class="th">ตัวเลือก "Live Claude usage" (ปิดไว้เป็นค่าเริ่มต้น): ถ้าติ๊กเอง โปรแกรมจะอ่าน token ล็อกอินของ Claude Code แบบอ่านอย่างเดียว แล้วถาม api.anthropic.com ทุก 2 นาที (endpoint ไม่เป็นทางการ)</span><span class="en">Optional "Live Claude usage" (off by default): if you tick it, the gadget reads your Claude Code login token (read-only) and asks api.anthropic.com every 2 minutes (unofficial endpoint).</span></li>
       <li><span class="th">ใช้ Ollama Cloud ด้วย? เปิด Settings แล้ววาง API key จาก ollama.com/settings/keys ในส่วน Ollama Cloud กด Connect จะเห็น usage ของ Ollama Cloud ใน gadget (คีย์เก็บแบบเข้ารหัส และส่งไปที่ ollama.com เท่านั้น)</span><span class="en">Using Ollama Cloud? Open Settings, paste an API key from ollama.com/settings/keys in the Ollama Cloud section and press Connect to see your Ollama Cloud usage in the gadget (the key is stored encrypted and only sent to ollama.com).</span></li>
+      <li><span class="th">ใช้ OpenRouter หรือ DeepSeek? ใส่ API key ในแท็บของแต่ละเจ้าใน Settings ได้เหมือน Ollama: OpenRouter แสดงยอดใช้ของคีย์ (และวงเงินถ้าตั้งไว้) ส่วน DeepSeek แสดงยอดเงินคงเหลือ</span><span class="en">Using OpenRouter or DeepSeek? Add an API key in its Settings tab the same way: OpenRouter shows the key's spend (and its limit, if set), DeepSeek shows your remaining balance.</span></li>
+      <li><span class="th">ใช้ Codex CLI? gadget จะแสดง usage 5hr / Week ของ Codex เองโดยอ่านจากไฟล์ session ในเครื่อง (ไม่ส่งข้อมูลออกไป)</span><span class="en">Using the Codex CLI? The gadget shows its 5hr / Week usage automatically, read from Codex's session files on your PC (nothing is sent anywhere).</span></li>
       <li><span class="th">โปรแกรมเช็กเวอร์ชันใหม่วันละครั้ง (เรียก api.github.com เท่านั้น) และติดตั้งให้เอง ปิดได้ที่ Settings (เฟือง ⚙ มุมขวาบน)</span><span class="en">The gadget checks for a new version daily (only contacts api.github.com) and installs it by itself. Turn it off in Settings (the ⚙ at the top right).</span></li>
     </ul>
     <div class="note">
@@ -114,7 +116,7 @@
 <script>
 (function () {
   var REPO = 'thekaroe-thailand/system-monitor';
-  var FALLBACK_TAG = 'v1.2.7';   // used only if the GitHub API can't be reached
+  var FALLBACK_TAG = 'v1.3.0';   // used only if the GitHub API can't be reached
   var tag = FALLBACK_TAG;
 
   function cmd(file) {
