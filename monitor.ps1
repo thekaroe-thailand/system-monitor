@@ -68,7 +68,7 @@ if ($DumpMetrics) {
 # ---- UI ----
 # ---- user settings (saved to %LOCALAPPDATA%\system-monitor\settings.json) ----
 $settingsFile = Join-Path $env:LOCALAPPDATA 'system-monitor\settings.json'
-$AppVersion = '1.2.0'
+$AppVersion = '1.2.1'
 $repoSlug   = 'thekaroe-thailand/system-monitor'
 $settings = @{ Transparency = 25; ShowCalendar = $true; ShowClaude = $true; Collapsed = $false
                AutoCheckUpdates = $true; LastUpdateCheck = 0; LatestTag = ''

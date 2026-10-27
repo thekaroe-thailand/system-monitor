@@ -1,10 +1,10 @@
 # system-monitor installer. One-liner (run in cmd or PowerShell):
-#   powershell -NoProfile -Command "irm https://raw.githubusercontent.com/thekaroe-thailand/system-monitor/v1.2.0/install.ps1 | iex"
+#   powershell -NoProfile -Command "irm https://raw.githubusercontent.com/thekaroe-thailand/system-monitor/v1.2.1/install.ps1 | iex"
 # Re-running it installs/updates to the version pinned in $ref below (the gadget also checks for updates itself, daily).
 # NOTE: keep this file ASCII-only (Windows PowerShell 5.1 reads BOM-less files as ANSI).
 $ErrorActionPreference = 'Stop'
 $repo       = 'thekaroe-thailand/system-monitor'
-$ref        = 'v1.2.0'
+$ref        = 'v1.2.1'
 $installDir = Join-Path $env:LOCALAPPDATA 'Programs\system-monitor'
 $files      = 'monitor.ps1', 'start-monitor.vbs', 'claude-usage-hook.ps1', 'uninstall.ps1', 'README.md'
 
@@ -42,13 +42,24 @@ function Enable-ClaudeUsage {
     $settingsPath = Join-Path $env:USERPROFILE '.claude\settings.json'
     try {
         $json = if (Test-Path $settingsPath) { Get-Content $settingsPath -Raw | ConvertFrom-Json } else { [pscustomobject]@{} }
-        if ($json.PSObject.Properties['statusLine']) {
-            Write-Host 'Claude Code already has a statusLine configured - left it unchanged, so Claude usage will show "--".'
-            return
-        }
-        if (Test-Path $settingsPath) { Copy-Item $settingsPath "$settingsPath.bak-system-monitor" -Force }
         $cmd = 'powershell -NoProfile -ExecutionPolicy Bypass -File "' + (Join-Path $installDir 'claude-usage-hook.ps1') + '"'
-        $json | Add-Member -NotePropertyName statusLine -NotePropertyValue ([pscustomobject]@{ type = 'command'; command = $cmd })
+        if ($json.PSObject.Properties['statusLine']) {
+            $existing = [string]$json.statusLine.command
+            if ($existing -notlike '*claude-usage-hook.ps1*') {
+                Write-Host 'Claude Code already has a different statusLine configured - left it unchanged, so Claude usage will show "--".'
+                return
+            }
+            if ($existing -like "*$installDir*") {
+                Write-Host 'Claude usage is already set up.'
+                return
+            }
+            # ours, but pointing at another copy (e.g. a source folder): point it at the installed copy
+            Copy-Item $settingsPath "$settingsPath.bak-system-monitor" -Force
+            $json.statusLine.command = $cmd
+        } else {
+            if (Test-Path $settingsPath) { Copy-Item $settingsPath "$settingsPath.bak-system-monitor" -Force }
+            $json | Add-Member -NotePropertyName statusLine -NotePropertyValue ([pscustomobject]@{ type = 'command'; command = $cmd })
+        }
         New-Item -ItemType Directory -Force (Split-Path $settingsPath) | Out-Null
         [IO.File]::WriteAllText($settingsPath, ($json | ConvertTo-Json -Depth 20), (New-Object Text.UTF8Encoding($false)))
         Write-Host 'Claude usage enabled (backup: settings.json.bak-system-monitor). It updates while you use the Claude Code CLI.'
