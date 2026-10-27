@@ -5,13 +5,13 @@ Gadget เล็กๆ มุมขวาล่างจอ แสดง CPU / R
 ## ติดตั้ง (พิมพ์บรรทัดเดียวใน cmd)
 
 ```
-powershell -NoProfile -Command "irm https://raw.githubusercontent.com/thekaroe-thailand/system-monitor/v1.0.0/install.ps1 | iex"
+powershell -NoProfile -Command "irm https://raw.githubusercontent.com/thekaroe-thailand/system-monitor/v1.1.0/install.ps1 | iex"
 ```
 
 - ติดตั้งที่ `%LOCALAPPDATA%\Programs\system-monitor` ตั้งให้เปิดพร้อม Windows และเปิดให้ทันที ไม่ต้องใช้สิทธิ์ admin
 - ระหว่างติดตั้งจะถามว่าจะให้แสดง usage ของ Claude Code (5hr / Week) ไหม ถ้าตอบ y จะเพิ่ม `statusLine` ใน `~\.claude\settings.json` (สำรองไฟล์เดิมไว้ และข้ามให้ถ้ามี statusLine อยู่แล้ว) ถ้าไม่ตอบ/ตอบ n แถวนี้จะขึ้น `--`
-- อัปเดต: รันคำสั่งเดิมซ้ำ (หรือเปลี่ยน `v1.0.0` เป็นเวอร์ชันใหม่)
-- ถอนการติดตั้ง: `powershell -NoProfile -Command "irm https://raw.githubusercontent.com/thekaroe-thailand/system-monitor/v1.0.0/uninstall.ps1 | iex"`
+- อัปเดต: ตั้งแต่ v1.1.0 โปรแกรมเช็กเวอร์ชันใหม่เองวันละครั้งจาก GitHub (เรียก api.github.com เท่านั้น ปิดได้ใน Settings) ถ้ามีจะขึ้นป้าย `Update` มุมขวาบน กดแล้วเลือก Update now ในหน้า Settings หรือจะรันคำสั่งติดตั้งซ้ำโดยเปลี่ยนเลขเวอร์ชันก็ได้ ค่า Settings ไม่หาย (เวอร์ชันก่อน v1.1.0 ต้องรันคำสั่งเวอร์ชันใหม่ด้วยมือหนึ่งครั้ง)
+- ถอนการติดตั้ง: `powershell -NoProfile -Command "irm https://raw.githubusercontent.com/thekaroe-thailand/system-monitor/v1.1.0/uninstall.ps1 | iex"`
 - สคริปต์เป็นข้อความธรรมดา เปิดอ่านก่อนรันได้ที่ลิงก์ในคำสั่ง ต้องใช้ Windows 10/11 (PowerShell 5.1 ที่มากับเครื่อง)
 
 ## การใช้งาน

@@ -68,7 +68,10 @@ if ($DumpMetrics) {
 # ---- UI ----
 # ---- user settings (saved to %LOCALAPPDATA%\system-monitor\settings.json) ----
 $settingsFile = Join-Path $env:LOCALAPPDATA 'system-monitor\settings.json'
-$settings = @{ Transparency = 25; ShowCalendar = $true; ShowClaude = $true; Collapsed = $false }
+$AppVersion = '1.1.0'
+$repoSlug   = 'thekaroe-thailand/system-monitor'
+$settings = @{ Transparency = 25; ShowCalendar = $true; ShowClaude = $true; Collapsed = $false
+               AutoCheckUpdates = $true; LastUpdateCheck = 0; LatestTag = '' }
 if (Test-Path $settingsFile) {
     try {
         $saved = Get-Content $settingsFile -Raw | ConvertFrom-Json
@@ -98,6 +101,8 @@ function Save-Settings {
     <Grid>
     <StackPanel Name="FullPanel">
     <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,-3,-4,0">
+      <TextBlock Name="BtnUpdate" Foreground="#26A69A" FontSize="11" Cursor="Hand" Visibility="Collapsed"
+                 VerticalAlignment="Center" Padding="4,0" ToolTip="Update available - click to open Settings"/>
       <TextBlock Name="BtnSettings" Foreground="#9AA0A6" FontFamily="Segoe UI Symbol" FontSize="13" Cursor="Hand"
                  ToolTip="Settings" Padding="4,0"/>
       <TextBlock Name="BtnHide" Foreground="#9AA0A6" FontFamily="Segoe UI Symbol" FontSize="13" Cursor="Hand"
@@ -181,7 +186,7 @@ function Save-Settings {
 
 $win = [Windows.Markup.XamlReader]::Load((New-Object Xml.XmlNodeReader $xaml))
 $ui = @{}
-foreach ($n in 'CpuText','CpuBar','RamText','RamBar','DiskText','DiskBar','NetText','SessText','SessBar','WeekText','WeekBar','CalPanel','CalPrev','CalTitle','CalNext','CalGrid','Root','MainGrid','BtnSettings','BtnHide','FullPanel','MiniPanel','MiniCpuText','MiniCpuBar','MiniRamText','MiniRamBar','MiniSessCell','MiniSessText','MiniSessBar','MiniWeekCell','MiniWeekText','MiniWeekBar','MenuSettings','MenuHide','MenuExit') { $ui[$n] = $win.FindName($n) }
+foreach ($n in 'CpuText','CpuBar','RamText','RamBar','DiskText','DiskBar','NetText','SessText','SessBar','WeekText','WeekBar','CalPanel','CalPrev','CalTitle','CalNext','CalGrid','Root','MainGrid','BtnUpdate','BtnSettings','BtnHide','FullPanel','MiniPanel','MiniCpuText','MiniCpuBar','MiniRamText','MiniRamBar','MiniSessCell','MiniSessText','MiniSessBar','MiniWeekCell','MiniWeekText','MiniWeekBar','MenuSettings','MenuHide','MenuExit') { $ui[$n] = $win.FindName($n) }
 $ui.MenuExit.Add_Click({ $win.Close() })
 
 function Set-Position {
@@ -271,6 +276,15 @@ function Set-Collapsed([bool]$collapsed) {
     <TextBlock Text="0% = solid, higher = more see-through" Foreground="#9AA0A6" FontSize="11" Margin="0,0,0,14"/>
     <CheckBox Name="ChkCal" Content="Show calendar" Foreground="White" Margin="0,0,0,8"/>
     <CheckBox Name="ChkClaude" Content="Show Claude usage (5hr / Week)" Foreground="White"/>
+    <Rectangle Height="1" Fill="#33FFFFFF" Margin="0,14,0,12"/>
+    <TextBlock Name="VerLabel" Foreground="#9AA0A6" FontSize="12"/>
+    <CheckBox Name="ChkUpdate" Content="Check for updates automatically (daily)" Foreground="White" Margin="0,8,0,8"/>
+    <StackPanel Orientation="Horizontal">
+      <Button Name="BtnCheck" Content="Check now" Padding="10,3"/>
+      <Button Name="BtnDoUpdate" Content="Update now" Padding="10,3" Margin="8,0,0,0" Visibility="Collapsed"/>
+    </StackPanel>
+    <TextBlock Name="UpdStatus" Foreground="#9AA0A6" FontSize="11" Margin="0,8,0,0" TextWrapping="Wrap"/>
+    <TextBlock Text="Update checks only contact api.github.com." Foreground="#6B7075" FontSize="10" Margin="0,6,0,0"/>
   </StackPanel>
 </Window>
 "@
@@ -281,7 +295,7 @@ function Show-Settings {
     if ($script:setWin) { [void]$script:setWin.Activate(); return }
     $w = [Windows.Markup.XamlReader]::Load((New-Object Xml.XmlNodeReader $setXaml))
     $script:setWin = $w
-    foreach ($n in 'TransLabel','TransSlider','ChkCal','ChkClaude') { $script:setUi[$n] = $w.FindName($n) }
+    foreach ($n in 'TransLabel','TransSlider','ChkCal','ChkClaude','VerLabel','ChkUpdate','BtnCheck','BtnDoUpdate','UpdStatus') { $script:setUi[$n] = $w.FindName($n) }
     $script:setUi.TransSlider.Value = $settings.Transparency
     $script:setUi.TransLabel.Text = 'Transparency: {0}%' -f $settings.Transparency
     $script:setUi.ChkCal.IsChecked = [bool]$settings.ShowCalendar
@@ -293,10 +307,18 @@ function Show-Settings {
     })
     $script:setUi.ChkCal.Add_Click({ $settings.ShowCalendar = [bool]$script:setUi.ChkCal.IsChecked; Apply-Settings; Save-Settings })
     $script:setUi.ChkClaude.Add_Click({ $settings.ShowClaude = [bool]$script:setUi.ChkClaude.IsChecked; Apply-Settings; Save-Settings })
+    $script:setUi.VerLabel.Text = "Version $AppVersion"
+    $script:setUi.ChkUpdate.IsChecked = [bool]$settings.AutoCheckUpdates
+    $script:setUi.ChkUpdate.Add_Click({ $settings.AutoCheckUpdates = [bool]$script:setUi.ChkUpdate.IsChecked; Save-Settings })
+    $script:setUi.BtnCheck.Add_Click({ Start-UpdateCheck })
+    $script:setUi.BtnDoUpdate.Add_Click({ Start-Update })
+    Refresh-UpdateUi
     $w.Add_Closed({ $script:setWin = $null })
     $w.Show()
 }
 $ui.MenuSettings.Add_Click({ Show-Settings })
+$ui.BtnUpdate.Text = 'Update'
+$ui.BtnUpdate.Add_MouseLeftButtonUp({ Show-Settings })
 # gear button (top-right of the gadget); U+2699 built in code to keep this file ASCII
 $ui.BtnSettings.Text = [string][char]0x2699
 $ui.BtnSettings.Add_MouseLeftButtonUp({ Show-Settings })
@@ -383,28 +405,121 @@ function Format-Remaining([double]$sec) {
 }
 
 # collapsed-bar version of Set-UsageRow: short "label pct" text + colored bar
-function Set-MiniUsage($limit, [string]$label, $text, $bar) {
+function Set-MiniUsage($limit, [string]$label, $text, $bar, [double]$ageSec) {
     $reset = if ($limit) { [double]$limit.resets_at } else { 0 }
     if ($reset -gt 1e11) { $reset = $reset / 1000 }
     if (-not $limit -or $reset -le [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()) { $text.Text = "$label --"; $bar.Value = 0; return }
     $pct = [math]::Round([double]$limit.used_percentage, 0)
-    $text.Text = '{0} {1}%' -f $label, $pct
+    if ($ageSec -gt $staleAfterSec) {
+        $text.Text = '{0} {1}%*' -f $label, $pct   # * = old data, not live
+        $text.Foreground = $calDim
+    } else {
+        $text.Text = '{0} {1}%' -f $label, $pct
+        $text.Foreground = [Windows.Media.Brushes]::White
+    }
     $bar.Value = $pct
     $bar.Foreground = if ($pct -ge 95) { $barHot } elseif ($pct -ge 80) { $barWarn } else { $barOk }
 }
 
-function Set-UsageRow($limit, $text, $bar) {
+$staleAfterSec = 900   # usage data older than this is shown greyed out with its age
+
+function Format-Age([double]$sec) {
+    if ($sec -ge 86400) { '{0}d' -f [int][math]::Floor($sec / 86400) }
+    elseif ($sec -ge 3600) { '{0}h' -f [int][math]::Floor($sec / 3600) }
+    else { '{0}m' -f [int][math]::Floor($sec / 60) }
+}
+
+function Set-UsageRow($limit, $text, $bar, [double]$ageSec) {
     $now = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
     $reset = if ($limit) { [double]$limit.resets_at } else { 0 }
     if ($reset -gt 1e11) { $reset = $reset / 1000 }
     if (-not $limit -or $reset -le $now) { $text.Text = '--'; $bar.Value = 0; return }
     $pct = [math]::Round([double]$limit.used_percentage, 0)
-    $text.Text = '{0}%  resets {1}' -f $pct, (Format-Remaining ($reset - $now))
+    if ($ageSec -gt $staleAfterSec) {
+        $text.Text = '{0}%  {1} ago' -f $pct, (Format-Age $ageSec)
+        $text.Foreground = $calDim
+    } else {
+        $text.Text = '{0}%  resets {1}' -f $pct, (Format-Remaining ($reset - $now))
+        $text.Foreground = [Windows.Media.Brushes]::White
+    }
     $bar.Value = $pct
     $bar.Foreground = if ($pct -ge 95) { $barHot } elseif ($pct -ge 80) { $barWarn } else { $barOk }
 }
 
+# ---- update check (GitHub latest release, once a day, in the background) ----
+$installedDir = Join-Path $env:LOCALAPPDATA 'Programs\system-monitor'
+$isInstalled  = ($PSScriptRoot -ieq $installedDir)
+$appStart     = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
+$updateState  = @{ Task = $null; Error = ''; Checked = $false; RetryAt = 0; Init = $false }
+
+function Test-UpdateAvailable {
+    if (-not $settings.LatestTag) { return $false }
+    try { return ([version]([string]$settings.LatestTag).TrimStart('v')) -gt ([version]$AppVersion) } catch { return $false }
+}
+
+function Refresh-UpdateUi {
+    $newer = Test-UpdateAvailable
+    $ui.BtnUpdate.Visibility = if ($newer) { 'Visible' } else { 'Collapsed' }
+    if (-not $script:setWin) { return }
+    $s = $script:setUi
+    $s.BtnCheck.IsEnabled = -not $updateState.Task
+    $s.BtnDoUpdate.Visibility = if ($newer -and $isInstalled) { 'Visible' } else { 'Collapsed' }
+    $s.UpdStatus.Text =
+        if ($updateState.Task) { 'Checking...' }
+        elseif ($updateState.Error) { $updateState.Error }
+        elseif ($newer -and $isInstalled) { "Update available: $($settings.LatestTag)" }
+        elseif ($newer) { "$($settings.LatestTag) is available (this copy runs from the source folder, so update it with git)." }
+        elseif ($updateState.Checked) { 'You have the latest version.' }
+        else { '' }
+}
+
+function Start-UpdateCheck {
+    if ($updateState.Task) { return }
+    [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+    $wc = New-Object Net.WebClient
+    $wc.Headers.Add('User-Agent', 'system-monitor-gadget')
+    $updateState.Error = ''; $updateState.Checked = $false
+    $updateState.Task = $wc.DownloadStringTaskAsync("https://api.github.com/repos/$repoSlug/releases/latest")
+    Refresh-UpdateUi
+}
+
+function Update-Poll {
+    $now = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
+    if (-not $updateState.Init) { $updateState.Init = $true; Refresh-UpdateUi }
+    $due = $settings.AutoCheckUpdates -and ($now - $appStart -gt 30) -and ($now -gt $updateState.RetryAt) -and (($now - [double]$settings.LastUpdateCheck) -gt 86400)
+    if (-not $updateState.Task -and $due) { Start-UpdateCheck }
+    $t = $updateState.Task
+    if ($t -and $t.IsCompleted) {
+        $updateState.Task = $null
+        $tag = $null
+        if (-not ($t.IsFaulted -or $t.IsCanceled)) { try { $tag = ($t.Result | ConvertFrom-Json).tag_name } catch { } }
+        if ($tag) {
+            $settings.LatestTag = [string]$tag; $settings.LastUpdateCheck = $now; $updateState.Error = ''
+            Save-Settings
+        } else {
+            $updateState.Error = 'Could not check for updates (offline, or no release found).'
+            $updateState.RetryAt = $now + 3600
+        }
+        $updateState.Checked = $true
+        Refresh-UpdateUi
+    }
+}
+
+# the installer is run from the NEW tag; SM_CLAUDE_USAGE=skip keeps it from re-asking the Claude question
+function Get-UpdateArgs {
+    $url = "https://raw.githubusercontent.com/$repoSlug/$($settings.LatestTag)/install.ps1"
+    $cmd = "`$env:SM_CLAUDE_USAGE='skip'; irm '$url' | iex"
+    @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-WindowStyle', 'Hidden', '-Command', $cmd)
+}
+
+function Start-Update {
+    if (-not ($isInstalled -and (Test-UpdateAvailable))) { return }
+    Start-Process powershell.exe -ArgumentList (Get-UpdateArgs)
+    if ($script:setWin) { $script:setUi.UpdStatus.Text = 'Updating... the gadget will restart in a few seconds.'; $script:setUi.BtnDoUpdate.IsEnabled = $false }
+}
+
 $update = {
+    Update-Poll
     # hidden: skip work, and don't call SetWindowPos below (its SHOWWINDOW flag would re-show the window)
     if ($win.Visibility -ne 'Visible') { return }
     Update-Calendar
@@ -412,10 +527,11 @@ $update = {
     $rl = if ($usageState.Data) { $usageState.Data.rate_limits } else { $null }
     $fh = if ($rl) { $rl.five_hour } else { $null }
     $sd = if ($rl) { $rl.seven_day } else { $null }
-    Set-UsageRow $fh $ui.SessText $ui.SessBar
-    Set-UsageRow $sd $ui.WeekText $ui.WeekBar
-    Set-MiniUsage $fh '5hr' $ui.MiniSessText $ui.MiniSessBar
-    Set-MiniUsage $sd 'Week' $ui.MiniWeekText $ui.MiniWeekBar
+    $age = if ($usageState.Data -and $usageState.Data.updatedAt) { [DateTimeOffset]::UtcNow.ToUnixTimeSeconds() - [double]$usageState.Data.updatedAt } else { 0 }
+    Set-UsageRow $fh $ui.SessText $ui.SessBar $age
+    Set-UsageRow $sd $ui.WeekText $ui.WeekBar $age
+    Set-MiniUsage $fh '5hr' $ui.MiniSessText $ui.MiniSessBar $age
+    Set-MiniUsage $sd 'Week' $ui.MiniWeekText $ui.MiniWeekBar $age
     $m = Get-Metrics
     $ui.MiniCpuText.Text = 'CPU {0}%' -f $m.Cpu
     $ui.MiniCpuBar.Value = $m.Cpu
