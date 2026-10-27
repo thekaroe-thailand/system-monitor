@@ -68,7 +68,7 @@ if ($DumpMetrics) {
 # ---- UI ----
 # ---- user settings (saved to %LOCALAPPDATA%\system-monitor\settings.json) ----
 $settingsFile = Join-Path $env:LOCALAPPDATA 'system-monitor\settings.json'
-$AppVersion = '1.2.5'
+$AppVersion = '1.2.6'
 $repoSlug   = 'thekaroe-thailand/system-monitor'
 $settings = @{ Transparency = 25; ShowCalendar = $true; ShowClaude = $true; Collapsed = $false
                AutoCheckUpdates = $true; LastUpdateCheck = 0; LatestTag = ''
@@ -456,7 +456,11 @@ function Set-UsageRow($limit, $text, $bar, [double]$ageSec) {
     $now = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
     $reset = if ($limit) { [double]$limit.resets_at } else { 0 }
     if ($reset -gt 1e11) { $reset = $reset / 1000 }
-    if (-not $limit -or $reset -le $now) { $text.Text = '--'; $bar.Value = 0; return }
+    if (-not $limit -or $reset -le $now) {
+        # no usable data: with Live off, point at the setting instead of a bare "--"
+        if ($settings.LiveClaudeUsage) { $text.Text = '--' } else { $text.Text = 'Live off - see Settings'; $text.Foreground = $calDim }
+        $bar.Value = 0; return
+    }
     $pct = [math]::Round([double]$limit.used_percentage, 0)
     if ($ageSec -gt $staleAfterSec) {
         $text.Text = '{0}%  {1} ago' -f $pct, (Format-Age $ageSec)
@@ -645,6 +649,10 @@ $update = {
     }
     Set-UsageRow $fh $ui.SessText $ui.SessBar $age
     Set-UsageRow $sd $ui.WeekText $ui.WeekBar $age
+    $usageTip = if (-not $settings.LiveClaudeUsage) { 'Live Claude usage is off: these numbers only update while you use the Claude CLI. Turn it on in Settings (gear).' }
+                elseif ($liveState.Error) { "Live Claude usage: $($liveState.Error) - showing the last CLI numbers." }
+                else { 'Live Claude usage (refreshed every 2 minutes).' }
+    $ui.SessText.ToolTip = $usageTip; $ui.WeekText.ToolTip = $usageTip
     Set-MiniUsage $fh '5hr' $ui.MiniSessText $ui.MiniSessBar $age
     Set-MiniUsage $sd 'Week' $ui.MiniWeekText $ui.MiniWeekBar $age
     $m = Get-Metrics
