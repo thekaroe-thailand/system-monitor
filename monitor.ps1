@@ -68,11 +68,12 @@ if ($DumpMetrics) {
 # ---- UI ----
 # ---- user settings (saved to %LOCALAPPDATA%\system-monitor\settings.json) ----
 $settingsFile = Join-Path $env:LOCALAPPDATA 'system-monitor\settings.json'
-$AppVersion = '1.2.4'
+$AppVersion = '1.2.5'
 $repoSlug   = 'thekaroe-thailand/system-monitor'
 $settings = @{ Transparency = 25; ShowCalendar = $true; ShowClaude = $true; Collapsed = $false
                AutoCheckUpdates = $true; LastUpdateCheck = 0; LatestTag = ''
-               AutoInstallUpdates = $true; LastAutoAttemptTag = ''; LastAutoAttemptAt = 0 }
+               AutoInstallUpdates = $true; LastAutoAttemptTag = ''; LastAutoAttemptAt = 0
+               LiveClaudeUsage = $false }
 if (Test-Path $settingsFile) {
     try {
         $saved = Get-Content $settingsFile -Raw | ConvertFrom-Json
@@ -282,6 +283,9 @@ function Set-Collapsed([bool]$collapsed) {
     <TextBlock Text="0% = solid, higher = more see-through" Foreground="#9AA0A6" FontSize="11" Margin="0,0,0,14"/>
     <CheckBox Name="ChkCal" Content="Show calendar" Foreground="White" Margin="0,0,0,8"/>
     <CheckBox Name="ChkClaude" Content="Show Claude usage (5hr / Week)" Foreground="White"/>
+    <CheckBox Name="ChkLive" Content="Live Claude usage (uses your Claude login)" Foreground="White" Margin="0,8,0,0"/>
+    <TextBlock Text="Off by default. Reads the login token in ~\.claude\.credentials.json (read-only) and asks api.anthropic.com every 2 minutes, so the numbers match Claude even when you only use VS Code. Unofficial endpoint: it may stop working."
+               Foreground="#6B7075" FontSize="10" TextWrapping="Wrap" Margin="22,2,0,0"/>
     <Rectangle Height="1" Fill="#33FFFFFF" Margin="0,14,0,12"/>
     <TextBlock Name="VerLabel" Foreground="#E8EAED" FontSize="13" FontWeight="SemiBold"/>
     <CheckBox Name="ChkUpdate" Content="Check for updates automatically (daily)" Foreground="White" Margin="0,8,0,8"/>
@@ -302,7 +306,7 @@ function Show-Settings {
     if ($script:setWin) { [void]$script:setWin.Activate(); return }
     $w = [Windows.Markup.XamlReader]::Load((New-Object Xml.XmlNodeReader $setXaml))
     $script:setWin = $w
-    foreach ($n in 'TransLabel','TransSlider','ChkCal','ChkClaude','VerLabel','ChkUpdate','ChkAutoInstall','BtnCheck','BtnDoUpdate','UpdStatus') { $script:setUi[$n] = $w.FindName($n) }
+    foreach ($n in 'TransLabel','TransSlider','ChkCal','ChkClaude','ChkLive','VerLabel','ChkUpdate','ChkAutoInstall','BtnCheck','BtnDoUpdate','UpdStatus') { $script:setUi[$n] = $w.FindName($n) }
     $script:setUi.TransSlider.Value = $settings.Transparency
     $script:setUi.TransLabel.Text = 'Transparency: {0}%' -f $settings.Transparency
     $script:setUi.ChkCal.IsChecked = [bool]$settings.ShowCalendar
@@ -318,6 +322,8 @@ function Show-Settings {
     $w.Title = "System Monitor Settings - v$AppVersion"
     $script:setUi.ChkUpdate.IsChecked = [bool]$settings.AutoCheckUpdates
     $script:setUi.ChkUpdate.Add_Click({ $settings.AutoCheckUpdates = [bool]$script:setUi.ChkUpdate.IsChecked; Save-Settings })
+    $script:setUi.ChkLive.IsChecked = [bool]$settings.LiveClaudeUsage
+    $script:setUi.ChkLive.Add_Click({ $settings.LiveClaudeUsage = [bool]$script:setUi.ChkLive.IsChecked; $liveState.NextAt = 0; Save-Settings })
     $script:setUi.ChkAutoInstall.IsChecked = [bool]$settings.AutoInstallUpdates
     $script:setUi.ChkAutoInstall.Add_Click({ $settings.AutoInstallUpdates = [bool]$script:setUi.ChkAutoInstall.IsChecked; Save-Settings })
     $script:setUi.BtnCheck.Add_Click({ Start-UpdateCheck })
@@ -567,16 +573,76 @@ function Start-Update {
     if ($script:setWin) { $script:setUi.UpdStatus.Text = 'Updating... the gadget will restart in a few seconds.'; $script:setUi.BtnDoUpdate.IsEnabled = $false }
 }
 
+# ---- live Claude usage (opt-in) ----
+# Asks api.anthropic.com/api/oauth/usage (unofficial) with the Claude Code login token, so the numbers match
+# Claude even when it is only used through VS Code. The token file is only READ: refreshing the token here
+# would rotate Claude Code's own login, so an expired token just means "no live data" until Claude Code renews it.
+$liveState = @{ Task = $null; NextAt = 0; Data = $null; Stamp = 0; Error = '' }
+
+function Get-ClaudeToken {
+    $p = Join-Path $env:USERPROFILE '.claude\.credentials.json'
+    if (-not (Test-Path $p)) { return $null }
+    try {
+        $o = (Get-Content $p -Raw | ConvertFrom-Json).claudeAiOauth
+        if (-not $o -or -not $o.accessToken) { return $null }
+        if ($o.expiresAt -and ([double]$o.expiresAt / 1000) -le [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()) { return $null }
+        return [string]$o.accessToken
+    } catch { return $null }
+}
+
+function Convert-ToEpoch($v) {
+    try {
+        if ($v -is [DateTime]) { return ([DateTimeOffset]$v).ToUnixTimeSeconds() }
+        return [DateTimeOffset]::Parse([string]$v, [Globalization.CultureInfo]::InvariantCulture).ToUnixTimeSeconds()
+    } catch { return 0 }
+}
+
+function Start-LiveUsage {
+    if ($liveState.Task) { return }
+    $tok = Get-ClaudeToken
+    if (-not $tok) { $liveState.Error = 'no valid Claude login token'; $liveState.NextAt = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds() + 300; return }
+    [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+    $wc = New-Object Net.WebClient
+    $wc.Headers.Add('Authorization', "Bearer $tok")
+    $wc.Headers.Add('anthropic-beta', 'oauth-2025-04-20')
+    $wc.Headers.Add('User-Agent', 'system-monitor-gadget')
+    $liveState.Task = $wc.DownloadStringTaskAsync('https://api.anthropic.com/api/oauth/usage')
+}
+
+function Update-LivePoll {
+    $now = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
+    if (-not $settings.LiveClaudeUsage) { $liveState.Data = $null; return }
+    if (-not $liveState.Task -and $now -ge $liveState.NextAt) { $liveState.NextAt = $now + 120; Start-LiveUsage }
+    $t = $liveState.Task
+    if ($t -and $t.IsCompleted) {
+        $liveState.Task = $null
+        if ($t.IsFaulted -or $t.IsCanceled) { $liveState.Error = 'request failed'; $liveState.NextAt = $now + 300; return }
+        try {
+            $j = $t.Result | ConvertFrom-Json
+            $liveState.Data = [pscustomobject]@{
+                five_hour = [pscustomobject]@{ used_percentage = [double]$j.five_hour.utilization; resets_at = (Convert-ToEpoch $j.five_hour.resets_at) }
+                seven_day = [pscustomobject]@{ used_percentage = [double]$j.seven_day.utilization; resets_at = (Convert-ToEpoch $j.seven_day.resets_at) }
+            }
+            $liveState.Stamp = $now; $liveState.Error = ''
+        } catch { $liveState.Error = 'unexpected reply'; $liveState.NextAt = $now + 300 }
+    }
+}
+
 $update = {
     Update-Poll
     # hidden: skip work, and don't call SetWindowPos below (its SHOWWINDOW flag would re-show the window)
     if ($win.Visibility -ne 'Visible') { return }
+    Update-LivePoll
     Update-Calendar
     Get-UsageData
     $rl = if ($usageState.Data) { $usageState.Data.rate_limits } else { $null }
     $fh = if ($rl) { $rl.five_hour } else { $null }
     $sd = if ($rl) { $rl.seven_day } else { $null }
     $age = if ($usageState.Data -and $usageState.Data.updatedAt) { [DateTimeOffset]::UtcNow.ToUnixTimeSeconds() - [double]$usageState.Data.updatedAt } else { 0 }
+    if ($settings.LiveClaudeUsage -and $liveState.Data) {   # fresh live numbers win over the CLI file
+        $liveAge = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds() - $liveState.Stamp
+        if ($liveAge -lt 600) { $fh = $liveState.Data.five_hour; $sd = $liveState.Data.seven_day; $age = $liveAge }
+    }
     Set-UsageRow $fh $ui.SessText $ui.SessBar $age
     Set-UsageRow $sd $ui.WeekText $ui.WeekBar $age
     Set-MiniUsage $fh '5hr' $ui.MiniSessText $ui.MiniSessBar $age

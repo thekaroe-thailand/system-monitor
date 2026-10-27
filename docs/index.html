@@ -65,8 +65,8 @@
       <button class="copy" type="button" data-copy="cmd-install"><span class="th">Copy</span><span class="en">Copy</span></button>
     </div>
     <p class="muted">
-      <span class="th">เวอร์ชันล่าสุด: <b class="ver">v1.2.4</b> · ต้องใช้ Windows 10 / 11 · ไม่ต้องใช้สิทธิ์ admin · ไม่ต้องลงโปรแกรมเพิ่ม</span>
-      <span class="en">Latest version: <b class="ver">v1.2.4</b> · Windows 10 / 11 · no admin rights · nothing else to install</span>
+      <span class="th">เวอร์ชันล่าสุด: <b class="ver">v1.2.5</b> · ต้องใช้ Windows 10 / 11 · ไม่ต้องใช้สิทธิ์ admin · ไม่ต้องลงโปรแกรมเพิ่ม</span>
+      <span class="en">Latest version: <b class="ver">v1.2.5</b> · Windows 10 / 11 · no admin rights · nothing else to install</span>
     </p>
   </section>
 
@@ -86,6 +86,7 @@
     <ul>
       <li><span class="th">คำสั่งนี้ดาวน์โหลดสคริปต์จาก GitHub แล้วรันทันที โค้ดทั้งหมดเป็นข้อความธรรมดา เปิดอ่านก่อนได้ที่ <a href="https://github.com/thekaroe-thailand/system-monitor" rel="noopener">GitHub</a></span><span class="en">This command downloads a script from GitHub and runs it right away. All code is plain text; read it first on <a href="https://github.com/thekaroe-thailand/system-monitor" rel="noopener">GitHub</a>.</span></li>
       <li><span class="th">ถ้าตอบ <code>y</code> ในคำถาม Claude จะมีการเพิ่ม <code>statusLine</code> ใน <code>~\.claude\settings.json</code> (สำรองไฟล์เดิมไว้ให้)</span><span class="en">If you answer <code>y</code> to the Claude question, a <code>statusLine</code> entry is added to <code>~\.claude\settings.json</code> (your original is backed up).</span></li>
+      <li><span class="th">ตัวเลือก "Live Claude usage" (ปิดไว้เป็นค่าเริ่มต้น): ถ้าติ๊กเอง โปรแกรมจะอ่าน token ล็อกอินของ Claude Code แบบอ่านอย่างเดียว แล้วถาม api.anthropic.com ทุก 2 นาที (endpoint ไม่เป็นทางการ)</span><span class="en">Optional "Live Claude usage" (off by default): if you tick it, the gadget reads your Claude Code login token (read-only) and asks api.anthropic.com every 2 minutes (unofficial endpoint).</span></li>
       <li><span class="th">โปรแกรมเช็กเวอร์ชันใหม่วันละครั้ง (เรียก api.github.com เท่านั้น) และติดตั้งให้เอง ปิดได้ที่ Settings (เฟือง ⚙ มุมขวาบน)</span><span class="en">The gadget checks for a new version daily (only contacts api.github.com) and installs it by itself. Turn it off in Settings (the ⚙ at the top right).</span></li>
     </ul>
     <div class="note">
@@ -112,7 +113,7 @@
 <script>
 (function () {
   var REPO = 'thekaroe-thailand/system-monitor';
-  var FALLBACK_TAG = 'v1.2.4';   // used only if the GitHub API can't be reached
+  var FALLBACK_TAG = 'v1.2.5';   // used only if the GitHub API can't be reached
   var tag = FALLBACK_TAG;
 
   function cmd(file) {
