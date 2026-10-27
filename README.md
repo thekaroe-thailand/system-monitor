@@ -2,6 +2,8 @@
 
 Gadget เล็กๆ มุมขวาล่างจอ แสดง CPU / RAM / Disk / Network ลอยทับทุกหน้าต่าง (Windows, PowerShell + WPF, ไม่ต้องติดตั้งอะไร)
 
+หน้าเว็บสำหรับคัดลอกคำสั่ง (ไทย/อังกฤษ): https://thekaroe-thailand.github.io/system-monitor/
+
 ## ติดตั้ง (พิมพ์บรรทัดเดียวใน cmd)
 
 ```

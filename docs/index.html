@@ -1,0 +1,169 @@
+<!doctype html>
+<html lang="th" data-l="th">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>System Monitor</title>
+<meta name="description" content="Tiny always-on-top Windows gadget: CPU / RAM / Disk / Network, Claude Code usage and a desk calendar. One-line install.">
+<style>
+  :root {
+    --bg: #f6f7f8; --card: #ffffff; --text: #1d2125; --muted: #5f6b76; --line: #dfe3e7;
+    --accent: #0f8f84; --accent-text: #ffffff; --code-bg: #14181c; --code-text: #e8eaed; --warn-bg: #fff6e0; --warn-line: #f0d28a;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #101316; --card: #181c20; --text: #e8eaed; --muted: #9aa3ab; --line: #2a3036;
+      --accent: #26a69a; --accent-text: #0b1210; --code-bg: #0a0c0e; --code-text: #e8eaed; --warn-bg: #2a2412; --warn-line: #5a4b1c;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 16px/1.6 system-ui, "Segoe UI", "Noto Sans Thai", sans-serif; }
+  main { max-width: 720px; margin: 0 auto; padding: 0 16px 56px; }
+  header { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 20px 0 8px; }
+  h1 { font-size: 1.5rem; margin: 0; }
+  .lang { border: 1px solid var(--line); background: var(--card); color: var(--text); border-radius: 8px; padding: 6px 12px; font: inherit; font-size: .9rem; cursor: pointer; }
+  .lead { color: var(--muted); margin: 4px 0 24px; }
+  section { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 20px; margin: 16px 0; }
+  h2 { font-size: 1.1rem; margin: 0 0 12px; }
+  .cmd { display: flex; align-items: stretch; gap: 8px; margin: 10px 0; }
+  .cmd pre { flex: 1; min-width: 0; margin: 0; background: var(--code-bg); color: var(--code-text); border-radius: 8px; padding: 12px 14px; font: 13px/1.5 ui-monospace, Consolas, "Courier New", monospace; white-space: pre-wrap; word-break: break-all; }
+  button.copy { flex: none; border: 0; border-radius: 8px; padding: 0 16px; min-width: 84px; background: var(--accent); color: var(--accent-text); font: inherit; font-weight: 600; cursor: pointer; }
+  button.copy:focus-visible, .lang:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  ol, ul { margin: 8px 0; padding-left: 22px; }
+  li { margin: 4px 0; }
+  code { background: var(--bg); border: 1px solid var(--line); border-radius: 4px; padding: 0 5px; font: 0.9em ui-monospace, Consolas, monospace; }
+  .note { background: var(--warn-bg); border: 1px solid var(--warn-line); border-radius: 8px; padding: 12px 14px; margin-top: 12px; font-size: .95rem; }
+  .muted { color: var(--muted); font-size: .92rem; }
+  a { color: var(--accent); }
+  footer { color: var(--muted); font-size: .9rem; margin-top: 24px; }
+  [data-l="th"] .en { display: none; }
+  [data-l="en"] .th { display: none; }
+  @media (max-width: 520px) { .cmd { flex-direction: column; } button.copy { padding: 10px; } }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>System Monitor</h1>
+    <button class="lang" id="lang" type="button" aria-label="Switch language">EN / ไทย</button>
+  </header>
+  <p class="lead">
+    <span class="th">Gadget เล็กๆ ลอยมุมขวาล่างของจอ แสดง CPU / RAM / Disk / เน็ต, usage ของ Claude Code และปฏิทินตั้งโต๊ะ สำหรับ Windows ติดตั้งด้วยคำสั่งบรรทัดเดียว</span>
+    <span class="en">A tiny always-on-top gadget for Windows showing CPU / RAM / Disk / Network, Claude Code usage and a desk calendar. Installs with one line.</span>
+  </p>
+
+  <section>
+    <h2><span class="th">ติดตั้ง</span><span class="en">Install</span></h2>
+    <ol>
+      <li><span class="th">กดปุ่ม Windows พิมพ์ <code>cmd</code> แล้วกด Enter</span><span class="en">Press the Windows key, type <code>cmd</code> and press Enter.</span></li>
+      <li><span class="th">กดปุ่ม Copy ด้านล่าง แล้ววางในหน้าต่างนั้น (คลิกขวา) และกด Enter</span><span class="en">Press Copy below, paste it into that window (right-click) and press Enter.</span></li>
+      <li><span class="th">จะมีคำถามว่าจะแสดง usage ของ Claude Code ไหม ถ้าไม่ได้ใช้ Claude Code พิมพ์ <code>n</code> หรือกด Enter</span><span class="en">It asks whether to show Claude Code usage. If you don't use Claude Code, type <code>n</code> or just press Enter.</span></li>
+      <li><span class="th">รอสักครู่ gadget จะขึ้นที่มุมขวาล่างเอง</span><span class="en">Wait a moment; the gadget appears at the bottom right.</span></li>
+    </ol>
+    <div class="cmd">
+      <pre id="cmd-install"></pre>
+      <button class="copy" type="button" data-copy="cmd-install"><span class="th">Copy</span><span class="en">Copy</span></button>
+    </div>
+    <p class="muted">
+      <span class="th">เวอร์ชันล่าสุด: <b class="ver">v1.2.0</b> · ต้องใช้ Windows 10 / 11 · ไม่ต้องใช้สิทธิ์ admin · ไม่ต้องลงโปรแกรมเพิ่ม</span>
+      <span class="en">Latest version: <b class="ver">v1.2.0</b> · Windows 10 / 11 · no admin rights · nothing else to install</span>
+    </p>
+  </section>
+
+  <section>
+    <h2><span class="th">มีอะไรบ้าง</span><span class="en">What you get</span></h2>
+    <ul>
+      <li><span class="th">CPU / RAM / Disk / เน็ต แบบบาร์สี ปรับความโปร่งใสได้</span><span class="en">Colored CPU / RAM / Disk / Network bars with adjustable transparency</span></li>
+      <li><span class="th">ปฏิทินตั้งโต๊ะ (เดือนไทย ปี พ.ศ.) ซ่อนได้</span><span class="en">Desk calendar (Thai months, Buddhist year), can be hidden</span></li>
+      <li><span class="th">usage ของ Claude Code (5hr / Week) เมื่อใช้ผ่าน CLI</span><span class="en">Claude Code 5hr / weekly usage (updates while you use the CLI)</span></li>
+      <li><span class="th">พับเหลือแถบเล็ก หรือซ่อนเข้า system tray</span><span class="en">Collapse to a small bar or hide to the system tray</span></li>
+      <li><span class="th">เปิดพร้อม Windows และอัปเดตตัวเองอัตโนมัติ</span><span class="en">Starts with Windows and updates itself automatically</span></li>
+    </ul>
+  </section>
+
+  <section>
+    <h2><span class="th">ควรรู้ก่อนติดตั้ง</span><span class="en">Before you install</span></h2>
+    <ul>
+      <li><span class="th">คำสั่งนี้ดาวน์โหลดสคริปต์จาก GitHub แล้วรันทันที โค้ดทั้งหมดเป็นข้อความธรรมดา เปิดอ่านก่อนได้ที่ <a href="https://github.com/thekaroe-thailand/system-monitor" rel="noopener">GitHub</a></span><span class="en">This command downloads a script from GitHub and runs it right away. All code is plain text; read it first on <a href="https://github.com/thekaroe-thailand/system-monitor" rel="noopener">GitHub</a>.</span></li>
+      <li><span class="th">ถ้าตอบ <code>y</code> ในคำถาม Claude จะมีการเพิ่ม <code>statusLine</code> ใน <code>~\.claude\settings.json</code> (สำรองไฟล์เดิมไว้ให้)</span><span class="en">If you answer <code>y</code> to the Claude question, a <code>statusLine</code> entry is added to <code>~\.claude\settings.json</code> (your original is backed up).</span></li>
+      <li><span class="th">โปรแกรมเช็กเวอร์ชันใหม่วันละครั้ง (เรียก api.github.com เท่านั้น) และติดตั้งให้เอง ปิดได้ที่ Settings (เฟือง ⚙ มุมขวาบน)</span><span class="en">The gadget checks for a new version daily (only contacts api.github.com) and installs it by itself. Turn it off in Settings (the ⚙ at the top right).</span></li>
+    </ul>
+    <div class="note">
+      <span class="th">Windows Defender / Antivirus บางตัวอาจเตือน เพราะโปรแกรมรันแบบซ่อนหน้าต่างดำ (สคริปต์ที่ไม่ได้เซ็นชื่อ) ถ้าไม่สบายใจ ไม่ต้องติดตั้งก็ได้</span>
+      <span class="en">Windows Defender / antivirus may warn because the program runs with a hidden console window (unsigned script). If you're not comfortable, don't install it.</span>
+    </div>
+  </section>
+
+  <section>
+    <h2><span class="th">ถอนการติดตั้ง</span><span class="en">Uninstall</span></h2>
+    <p class="muted"><span class="th">รันคำสั่งนี้ใน cmd จะลบโปรแกรม ค่าตั้งค่า และรายการเปิดพร้อม Windows</span><span class="en">Run this in cmd. It removes the program, its settings and the startup entry.</span></p>
+    <div class="cmd">
+      <pre id="cmd-uninstall"></pre>
+      <button class="copy" type="button" data-copy="cmd-uninstall"><span class="th">Copy</span><span class="en">Copy</span></button>
+    </div>
+  </section>
+
+  <footer>
+    <a href="https://github.com/thekaroe-thailand/system-monitor" rel="noopener">GitHub</a> ·
+    <a href="https://github.com/thekaroe-thailand/system-monitor/releases" rel="noopener">Releases</a>
+  </footer>
+</main>
+
+<script>
+(function () {
+  var REPO = 'thekaroe-thailand/system-monitor';
+  var FALLBACK_TAG = 'v1.2.0';   // used only if the GitHub API can't be reached
+  var tag = FALLBACK_TAG;
+
+  function cmd(file) {
+    return 'powershell -NoProfile -Command "irm https://raw.githubusercontent.com/' + REPO + '/' + tag + '/' + file + ' | iex"';
+  }
+  function render() {
+    document.getElementById('cmd-install').textContent = cmd('install.ps1');
+    document.getElementById('cmd-uninstall').textContent = cmd('uninstall.ps1');
+    var v = document.querySelectorAll('.ver');
+    for (var i = 0; i < v.length; i++) v[i].textContent = tag;
+  }
+  render();
+
+  // newest release tag; only accepted if it looks like vX.Y.Z (it ends up inside a command people run)
+  if (window.fetch) {
+    fetch('https://api.github.com/repos/' + REPO + '/releases/latest')
+      .then(function (r) { return r.ok ? r.json() : Promise.reject(); })
+      .then(function (j) { if (j && /^v\d+\.\d+\.\d+$/.test(j.tag_name)) { tag = j.tag_name; render(); } })
+      .catch(function () {});
+  }
+
+  // language: saved choice > browser language
+  var root = document.documentElement;
+  function setLang(l) { root.setAttribute('data-l', l); root.setAttribute('lang', l); try { localStorage.setItem('sm-lang', l); } catch (e) {} }
+  var saved = null; try { saved = localStorage.getItem('sm-lang'); } catch (e) {}
+  setLang(saved === 'en' || saved === 'th' ? saved : ((navigator.language || '').toLowerCase().indexOf('th') === 0 ? 'th' : 'en'));
+  document.getElementById('lang').addEventListener('click', function () { setLang(root.getAttribute('data-l') === 'th' ? 'en' : 'th'); });
+
+  // copy buttons (clipboard API, with a fallback for non-secure contexts / older browsers)
+  function fallbackCopy(text) {
+    var ta = document.createElement('textarea');
+    ta.value = text; ta.setAttribute('readonly', ''); ta.style.position = 'fixed'; ta.style.opacity = '0';
+    document.body.appendChild(ta); ta.select();
+    var ok = false; try { ok = document.execCommand('copy'); } catch (e) {}
+    document.body.removeChild(ta); return ok;
+  }
+  var buttons = document.querySelectorAll('button.copy');
+  Array.prototype.forEach.call(buttons, function (btn) {
+    var original = btn.innerHTML;
+    btn.addEventListener('click', function () {
+      var text = document.getElementById(btn.getAttribute('data-copy')).textContent;
+      function done(ok) {
+        btn.innerHTML = ok ? '<span class="th">คัดลอกแล้ว ✓</span><span class="en">Copied ✓</span>' : '<span class="th">กดค้างเพื่อเลือกเอง</span><span class="en">Select manually</span>';
+        setTimeout(function () { btn.innerHTML = original; }, 1800);
+      }
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(text).then(function () { done(true); }, function () { done(fallbackCopy(text)); });
+      } else { done(fallbackCopy(text)); }
+    });
+  });
+})();
+</script>
+</body>
+</html>
