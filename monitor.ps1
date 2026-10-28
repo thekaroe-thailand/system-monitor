@@ -42,13 +42,14 @@ public static class AppBar {
         return SHAppBarMessage(0, ref d) != UIntPtr.Zero;
     }
     public static void Remove(IntPtr h) { var d = Data(h); SHAppBarMessage(1, ref d); hasAsked = false; }
-    // reserve heightPx at the bottom of the primary screen (above the taskbar) and return the strip.
-    // SETPOS only when the strip changes: setting it notifies the other bars, which could echo back.
-    public static RECT DockBottom(IntPtr h, int heightPx) {
-        var d = Data(h); d.uEdge = 3;
-        d.rc.Left = 0; d.rc.Right = GetSystemMetrics(0); d.rc.Bottom = GetSystemMetrics(1); d.rc.Top = d.rc.Bottom - heightPx;
+    // reserve heightPx at the top or bottom of the primary screen (next to the taskbar if it is on that edge)
+    // and return the strip. SETPOS only when the strip changes: setting it notifies the other bars, which could echo back.
+    public static RECT Dock(IntPtr h, int heightPx, bool top) {
+        var d = Data(h); d.uEdge = top ? 1u : 3u;
+        d.rc.Left = 0; d.rc.Right = GetSystemMetrics(0);
+        if (top) { d.rc.Top = 0; d.rc.Bottom = heightPx; } else { d.rc.Bottom = GetSystemMetrics(1); d.rc.Top = d.rc.Bottom - heightPx; }
         SHAppBarMessage(2, ref d);
-        d.rc.Top = d.rc.Bottom - heightPx;
+        if (top) d.rc.Bottom = d.rc.Top + heightPx; else d.rc.Top = d.rc.Bottom - heightPx;
         if (hasAsked && d.rc.Left == asked.Left && d.rc.Top == asked.Top && d.rc.Right == asked.Right && d.rc.Bottom == asked.Bottom) return d.rc;
         asked = d.rc; hasAsked = true;
         SHAppBarMessage(3, ref d);
@@ -121,7 +122,7 @@ $settingsFile = Join-Path $env:LOCALAPPDATA 'system-monitor\settings.json'
 $AppVersion = '1.3.3'
 $repoSlug   = 'thekaroe-thailand/system-monitor'
 # <Provider>Key values are DPAPI-encrypted (ConvertFrom-SecureString)
-$settings = @{ Transparency = 25; ShowCalendar = $true; ShowClaude = $true; Collapsed = $false; DockBar = $false
+$settings = @{ Transparency = 25; ShowCalendar = $true; ShowClaude = $true; Collapsed = $false; DockBar = $false; DockEdge = 'Top'
                AutoCheckUpdates = $true; LastUpdateCheck = 0; LatestTag = ''
                AutoInstallUpdates = $true; LastAutoAttemptTag = ''; LastAutoAttemptAt = 0
                LiveClaudeUsage = $false; ShowCodex = $true
@@ -206,12 +207,12 @@ function Save-Settings {
     </StackPanel>
     <Grid Name="MiniPanel" Visibility="Collapsed" Background="Transparent" Cursor="Hand" ToolTip="Click to expand">
       <StackPanel Name="MiniStack" Orientation="Horizontal" VerticalAlignment="Center" Margin="0,0,20,0">
-        <StackPanel MinWidth="56" Margin="0,0,10,0" VerticalAlignment="Center">
-          <TextBlock Name="MiniCpuText" Foreground="White" FontSize="11"/>
+        <StackPanel MinWidth="62" Margin="0,0,10,0" VerticalAlignment="Center">
+          <TextBlock Name="MiniCpuText" Foreground="White" FontSize="12"/>
           <ProgressBar Name="MiniCpuBar" Height="3" Maximum="100" Foreground="#4FC3F7" Background="#33FFFFFF" BorderThickness="0" Margin="0,2,0,0"/>
         </StackPanel>
-        <StackPanel MinWidth="56" VerticalAlignment="Center">
-          <TextBlock Name="MiniRamText" Foreground="White" FontSize="11"/>
+        <StackPanel MinWidth="62" VerticalAlignment="Center">
+          <TextBlock Name="MiniRamText" Foreground="White" FontSize="12"/>
           <ProgressBar Name="MiniRamBar" Height="3" Maximum="100" Foreground="#81C784" Background="#33FFFFFF" BorderThickness="0" Margin="0,2,0,0"/>
         </StackPanel>
       </StackPanel>
@@ -263,12 +264,12 @@ $miniXaml = @'
 <StackPanel xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" Orientation="Horizontal" ToolTip="{TITLE} - click to expand">
   <Rectangle Width="1" Fill="#33FFFFFF" Margin="10,1"/>
   <Ellipse Width="6" Height="6" Fill="{ACCENT}" VerticalAlignment="Center" Margin="0,0,5,0"/>
-  <StackPanel MinWidth="56" VerticalAlignment="Center">
-    <TextBlock Name="Text1" Foreground="White" FontSize="11"/>
+  <StackPanel MinWidth="62" VerticalAlignment="Center">
+    <TextBlock Name="Text1" Foreground="White" FontSize="12"/>
     <ProgressBar Name="Bar1" Height="3" Maximum="100" Foreground="#26A69A" Background="#33FFFFFF" BorderThickness="0" Margin="0,2,0,0"/>
   </StackPanel>
-  <StackPanel Name="Cell2" MinWidth="56" Margin="10,0,0,0" VerticalAlignment="Center">
-    <TextBlock Name="Text2" Foreground="White" FontSize="11"/>
+  <StackPanel Name="Cell2" MinWidth="62" Margin="10,0,0,0" VerticalAlignment="Center">
+    <TextBlock Name="Text2" Foreground="White" FontSize="12"/>
     <ProgressBar Name="Bar2" Height="3" Maximum="100" Foreground="#26A69A" Background="#33FFFFFF" BorderThickness="0" Margin="0,2,0,0"/>
   </StackPanel>
 </StackPanel>
@@ -314,8 +315,8 @@ foreach ($d in @(
     $keyProviders[$d.Id] = $d
 }
 
-# ---- dock: with DockBar on, the collapsed bar becomes a full-width AppBar above the taskbar ----
-$dockHeight = 30
+# ---- dock: with DockBar on, the collapsed bar becomes a full-width AppBar at the top (DockEdge) or bottom ----
+$dockHeight = 32
 $dock = @{ On = $false; Rect = $null; FullScreen = $false; Screen = '' }
 
 function Get-Hwnd { (New-Object Windows.Interop.WindowInteropHelper $win).Handle }
@@ -333,11 +334,12 @@ function Update-Dock([switch]$Force) {
         if (-not [AppBar]::Add($h)) { return }
         $dock.On = $true; $Force = $true
     }
-    $screen = '{0}x{1}' -f [Windows.SystemParameters]::PrimaryScreenWidth, [Windows.SystemParameters]::PrimaryScreenHeight
+    $top = $settings.DockEdge -ne 'Bottom'
+    $screen = '{0}x{1}|{2}' -f [Windows.SystemParameters]::PrimaryScreenWidth, [Windows.SystemParameters]::PrimaryScreenHeight, $top
     if (-not $Force -and $screen -eq $dock.Screen) { return }
     $dock.Screen = $screen
     $m = [Windows.PresentationSource]::FromVisual($win).CompositionTarget.TransformToDevice
-    $r = [AppBar]::DockBottom($h, [int][math]::Round($dockHeight * $m.M22))
+    $r = [AppBar]::Dock($h, [int][math]::Round($dockHeight * $m.M22), $top)
     $dock.Rect = New-Object Windows.Rect ($r.Left / $m.M11), ($r.Top / $m.M22), (($r.Right - $r.Left) / $m.M11), (($r.Bottom - $r.Top) / $m.M22)
     Set-Position
 }
@@ -425,6 +427,7 @@ function Apply-Settings {
         }
     }
     $ui.Root.CornerRadius = New-Object Windows.CornerRadius $(if ($docked) { 0 } else { 8 })
+    $ui.MiniStack.HorizontalAlignment = if ($docked) { 'Right' } else { 'Left' }
     $vis = if ($settings.ShowClaude) { 'Visible' } else { 'Collapsed' }
     $claudeSec.Panel.Visibility = $vis; $claudeSec.Mini.Visibility = $vis
     # Codex appears when its session folder exists ($codexState is set further down; null on the first call)
@@ -460,8 +463,12 @@ function Set-Collapsed([bool]$collapsed) {
         <Slider Name="TransSlider" Minimum="0" Maximum="90" TickFrequency="5" IsSnapToTickEnabled="True" Margin="0,6,0,2"/>
         <TextBlock Text="0% = solid, higher = more see-through" Foreground="#9AA0A6" FontSize="11" Margin="0,0,0,14"/>
         <CheckBox Name="ChkCal" Content="Show calendar" Foreground="White"/>
-        <CheckBox Name="ChkDock" Content="Dock the collapsed bar above the taskbar" Foreground="White" Margin="0,8,0,0"/>
-        <TextBlock Text="Like the taskbar: it spans the screen and keeps that space for itself, so maximized windows stop above it. Full-screen apps (games, videos) still cover it."
+        <CheckBox Name="ChkDock" Content="Dock the collapsed bar to the screen edge" Foreground="White" Margin="0,8,0,0"/>
+        <ComboBox Name="CmbDockEdge" Width="190" HorizontalAlignment="Left" Margin="22,4,0,0">
+          <ComboBoxItem Tag="Top" Content="Top of the screen"/>
+          <ComboBoxItem Tag="Bottom" Content="Bottom, above the taskbar"/>
+        </ComboBox>
+        <TextBlock Text="Like the taskbar: it spans the screen and keeps that space for itself, so maximized windows don't cover it. Full-screen apps (games, videos) still cover it."
                    Foreground="#6B7075" FontSize="10" TextWrapping="Wrap" Margin="22,2,0,0"/>
         <Rectangle Height="1" Fill="#33FFFFFF" Margin="0,14,0,12"/>
         <TextBlock Name="VerLabel" Foreground="#E8EAED" FontSize="13" FontWeight="SemiBold"/>
@@ -564,7 +571,7 @@ function Show-Settings([string]$tab = '') {
     $w = [Windows.Markup.XamlReader]::Load((New-Object Xml.XmlNodeReader $setXaml))
     $script:setWin = $w
     $script:setTabs = @()
-    foreach ($n in 'TabList','PageHost','PageGeneral','PageClaude','PageCodex','TransLabel','TransSlider','ChkCal','ChkDock','ChkClaude','ChkLive','ChkCodex','CodexStatus',
+    foreach ($n in 'TabList','PageHost','PageGeneral','PageClaude','PageCodex','TransLabel','TransSlider','ChkCal','ChkDock','CmbDockEdge','ChkClaude','ChkLive','ChkCodex','CodexStatus',
                 'VerLabel','ChkUpdate','ChkAutoInstall','BtnCheck','BtnDoUpdate','UpdStatus') { $script:setUi[$n] = $w.FindName($n) }
     $script:setUi.TransSlider.Value = $settings.Transparency
     $script:setUi.TransLabel.Text = 'Transparency: {0}%' -f $settings.Transparency
@@ -582,6 +589,11 @@ function Show-Settings([string]$tab = '') {
         $settings.DockBar = [bool]$script:setUi.ChkDock.IsChecked
         if ($settings.DockBar) { $settings.Collapsed = $true }
         Set-Collapsed $settings.Collapsed
+    })
+    $script:setUi.CmbDockEdge.SelectedIndex = if ($settings.DockEdge -eq 'Bottom') { 1 } else { 0 }
+    $script:setUi.CmbDockEdge.Add_SelectionChanged({
+        $settings.DockEdge = [string]$script:setUi.CmbDockEdge.SelectedItem.Tag
+        Save-Settings; Update-Dock -Force
     })
     $script:setUi.ChkClaude.Add_Click({ $settings.ShowClaude = [bool]$script:setUi.ChkClaude.IsChecked; Apply-Settings; Save-Settings })
     $script:setUi.VerLabel.Text = "System Monitor v$AppVersion"
