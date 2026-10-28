@@ -68,7 +68,7 @@ if ($DumpMetrics) {
 # ---- UI ----
 # ---- user settings (saved to %LOCALAPPDATA%\system-monitor\settings.json) ----
 $settingsFile = Join-Path $env:LOCALAPPDATA 'system-monitor\settings.json'
-$AppVersion = '1.3.0'
+$AppVersion = '1.3.1'
 $repoSlug   = 'thekaroe-thailand/system-monitor'
 # <Provider>Key values are DPAPI-encrypted (ConvertFrom-SecureString)
 $settings = @{ Transparency = 25; ShowCalendar = $true; ShowClaude = $true; Collapsed = $false
@@ -155,18 +155,15 @@ function Save-Settings {
     </StackPanel>
     </StackPanel>
     <Grid Name="MiniPanel" Visibility="Collapsed" Background="Transparent" Cursor="Hand" ToolTip="Click to expand">
-      <StackPanel Name="MiniStack" VerticalAlignment="Center" Margin="0,2,16,2">
-      <Grid>
-        <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
-        <StackPanel Grid.Column="0" Margin="0,0,8,0">
+      <StackPanel Name="MiniStack" Orientation="Horizontal" VerticalAlignment="Center" Margin="0,0,20,0">
+        <StackPanel MinWidth="56" Margin="0,0,10,0" VerticalAlignment="Center">
           <TextBlock Name="MiniCpuText" Foreground="White" FontSize="11"/>
-          <ProgressBar Name="MiniCpuBar" Height="4" Maximum="100" Foreground="#4FC3F7" Background="#33FFFFFF" BorderThickness="0" Margin="0,2,0,0"/>
+          <ProgressBar Name="MiniCpuBar" Height="3" Maximum="100" Foreground="#4FC3F7" Background="#33FFFFFF" BorderThickness="0" Margin="0,2,0,0"/>
         </StackPanel>
-        <StackPanel Grid.Column="1">
+        <StackPanel MinWidth="56" VerticalAlignment="Center">
           <TextBlock Name="MiniRamText" Foreground="White" FontSize="11"/>
-          <ProgressBar Name="MiniRamBar" Height="4" Maximum="100" Foreground="#81C784" Background="#33FFFFFF" BorderThickness="0" Margin="0,2,0,0"/>
+          <ProgressBar Name="MiniRamBar" Height="3" Maximum="100" Foreground="#81C784" Background="#33FFFFFF" BorderThickness="0" Margin="0,2,0,0"/>
         </StackPanel>
-      </Grid>
       </StackPanel>
       <TextBlock Name="MiniPlus" Foreground="#9AA0A6" FontFamily="Segoe UI Symbol" FontSize="13" Text="+"
                  HorizontalAlignment="Right" VerticalAlignment="Center" Padding="4,0"/>
@@ -213,23 +210,18 @@ $sectionXaml = @'
 </StackPanel>
 '@
 $miniXaml = @'
-<Grid xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" Margin="0,6,0,0" ToolTip="{TITLE} - click to expand">
-  <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
-  <StackPanel Margin="0,0,8,0">
-    <StackPanel Orientation="Horizontal">
-      <Ellipse Width="6" Height="6" Fill="{ACCENT}" VerticalAlignment="Center" Margin="0,1,4,0"/>
-      <TextBlock Name="Text1" Foreground="White" FontSize="11"/>
-    </StackPanel>
-    <ProgressBar Name="Bar1" Height="4" Maximum="100" Foreground="#26A69A" Background="#33FFFFFF" BorderThickness="0" Margin="0,2,0,0"/>
+<StackPanel xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" Orientation="Horizontal" ToolTip="{TITLE} - click to expand">
+  <Rectangle Width="1" Fill="#33FFFFFF" Margin="10,1"/>
+  <Ellipse Width="6" Height="6" Fill="{ACCENT}" VerticalAlignment="Center" Margin="0,0,5,0"/>
+  <StackPanel MinWidth="56" VerticalAlignment="Center">
+    <TextBlock Name="Text1" Foreground="White" FontSize="11"/>
+    <ProgressBar Name="Bar1" Height="3" Maximum="100" Foreground="#26A69A" Background="#33FFFFFF" BorderThickness="0" Margin="0,2,0,0"/>
   </StackPanel>
-  <StackPanel Name="Cell2" Grid.Column="1">
-    <StackPanel Orientation="Horizontal">
-      <Ellipse Width="6" Height="6" Fill="{ACCENT}" VerticalAlignment="Center" Margin="0,1,4,0"/>
-      <TextBlock Name="Text2" Foreground="White" FontSize="11"/>
-    </StackPanel>
-    <ProgressBar Name="Bar2" Height="4" Maximum="100" Foreground="#26A69A" Background="#33FFFFFF" BorderThickness="0" Margin="0,2,0,0"/>
+  <StackPanel Name="Cell2" MinWidth="56" Margin="10,0,0,0" VerticalAlignment="Center">
+    <TextBlock Name="Text2" Foreground="White" FontSize="11"/>
+    <ProgressBar Name="Bar2" Height="3" Maximum="100" Foreground="#26A69A" Background="#33FFFFFF" BorderThickness="0" Margin="0,2,0,0"/>
   </StackPanel>
-</Grid>
+</StackPanel>
 '@
 
 function New-UsageSection([string]$title, [string]$accent, [string]$lbl1 = '5hr', [string]$lbl2 = 'Week') {
@@ -275,7 +267,8 @@ foreach ($d in @(
 function Set-Position {
     $wa = [Windows.SystemParameters]::WorkArea
     $h = if ($win.ActualHeight -gt 0) { $win.ActualHeight } else { 192 }
-    $win.Left = $wa.Right - $win.Width - 12
+    $w = if ($win.ActualWidth -gt 0) { $win.ActualWidth } else { 210 }
+    $win.Left = $wa.Right - $w - 12
     $win.Top  = $wa.Bottom - $h - 12
 }
 
@@ -326,9 +319,17 @@ function Apply-Settings {
     $alpha = [byte][math]::Round((100 - $settings.Transparency) / 100 * 255)
     $ui.Root.Background = New-Object Windows.Media.SolidColorBrush ([Windows.Media.Color]::FromArgb($alpha, 0x18, 0x18, 0x18))
     $ui.CalPanel.Visibility = if ($settings.ShowCalendar) { 'Visible' } else { 'Collapsed' }
-    # collapsed = small bar (CPU / RAM + one line per provider) instead of the full gadget
+    # collapsed = one-row status bar (CPU / RAM + a group per provider) instead of the full gadget;
+    # the bar sizes its own width, the full gadget is fixed at 210 wide
     $ui.FullPanel.Visibility = if ($settings.Collapsed) { 'Collapsed' } else { 'Visible' }
     $ui.MiniPanel.Visibility = if ($settings.Collapsed) { 'Visible' } else { 'Collapsed' }
+    if ($settings.Collapsed) {
+        $win.ClearValue([Windows.FrameworkElement]::WidthProperty); $win.SizeToContent = 'WidthAndHeight'
+        $ui.Root.Padding = New-Object Windows.Thickness 10, 5, 10, 5
+    } else {
+        $win.SizeToContent = 'Height'; $win.Width = 210
+        $ui.Root.Padding = New-Object Windows.Thickness 10, 8, 10, 8
+    }
     $vis = if ($settings.ShowClaude) { 'Visible' } else { 'Collapsed' }
     $claudeSec.Panel.Visibility = $vis; $claudeSec.Mini.Visibility = $vis
     # Codex appears when its session folder exists ($codexState is set further down; null on the first call)
@@ -591,6 +592,8 @@ $win.Add_SourceInitialized({
     [void][Win32]::SetWindowLong($h, $GWL_EXSTYLE, ($ex -bor $WS_EX_TOOLWINDOW -bor $WS_EX_NOACTIVATE))
     Set-Position
 })
+# the collapsed bar grows / shrinks with its text: keep it anchored bottom-right
+$win.Add_SizeChanged({ Set-Position })
 
 # ---- Claude usage (written by claude-usage-hook.ps1 via Claude Code's statusLine) ----
 $usageFile  = Join-Path $env:LOCALAPPDATA 'system-monitor\claude-usage.json'
