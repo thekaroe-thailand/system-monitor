@@ -118,7 +118,7 @@ if ($DumpMetrics) {
 # ---- UI ----
 # ---- user settings (saved to %LOCALAPPDATA%\system-monitor\settings.json) ----
 $settingsFile = Join-Path $env:LOCALAPPDATA 'system-monitor\settings.json'
-$AppVersion = '1.3.2'
+$AppVersion = '1.3.3'
 $repoSlug   = 'thekaroe-thailand/system-monitor'
 # <Provider>Key values are DPAPI-encrypted (ConvertFrom-SecureString)
 $settings = @{ Transparency = 25; ShowCalendar = $true; ShowClaude = $true; Collapsed = $false; DockBar = $false
@@ -419,7 +419,8 @@ function Apply-Settings {
             $win.ClearValue([Windows.FrameworkElement]::WidthProperty); $win.SizeToContent = 'WidthAndHeight'
             $ui.Root.Padding = New-Object Windows.Thickness 10, 5, 10, 5
         } else {
-            $win.Width = 210; $win.SizeToContent = 'Height'
+            # this order: a Width set while SizeToContent is still WidthAndHeight is dropped (stays bar-wide)
+            $win.SizeToContent = 'Height'; $win.Width = 210
             $ui.Root.Padding = New-Object Windows.Thickness 10, 8, 10, 8
         }
     }
