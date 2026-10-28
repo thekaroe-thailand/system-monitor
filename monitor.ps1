@@ -16,6 +16,56 @@ public static class Win32 {
 }
 "@
 
+# AppBar = the shell API the taskbar itself uses: a registered bar reserves a strip at a screen edge and
+# Windows shrinks the work area, so maximized / snapped windows stop next to it. Pixels, primary screen.
+Add-Type -ReferencedAssemblies ([Windows.Interop.HwndSource].Assembly.Location), ([Windows.Threading.Dispatcher].Assembly.Location) @"
+using System;
+using System.Runtime.InteropServices;
+using System.Windows.Interop;
+public static class AppBar {
+    [StructLayout(LayoutKind.Sequential)] public struct RECT { public int Left, Top, Right, Bottom; }
+    [StructLayout(LayoutKind.Sequential)] struct APPBARDATA { public int cbSize; public IntPtr hWnd; public uint uCallbackMessage; public uint uEdge; public RECT rc; public IntPtr lParam; }
+    [DllImport("shell32.dll")] static extern UIntPtr SHAppBarMessage(uint msg, ref APPBARDATA d);
+    [DllImport("user32.dll")] static extern uint RegisterWindowMessage(string s);
+    [DllImport("user32.dll")] static extern int GetSystemMetrics(int i);
+    public static readonly uint CallbackMsg = RegisterWindowMessage("SystemMonitorAppBar");
+    static readonly uint TaskbarCreated = RegisterWindowMessage("TaskbarCreated");
+    // (ABN_* code, lParam); code -1 = Explorer restarted and forgot every app bar
+    public static Action<int, long> Notify;
+    static RECT asked; static bool hasAsked;
+    static APPBARDATA Data(IntPtr h) { var d = new APPBARDATA(); d.cbSize = Marshal.SizeOf(d); d.hWnd = h; return d; }
+    // NEW fails when the window is still registered (TaskbarCreated also comes without a real Explorer restart)
+    public static bool Add(IntPtr h) {
+        var d = Data(h); d.uCallbackMessage = CallbackMsg; hasAsked = false;
+        if (SHAppBarMessage(0, ref d) != UIntPtr.Zero) return true;
+        Remove(h);
+        return SHAppBarMessage(0, ref d) != UIntPtr.Zero;
+    }
+    public static void Remove(IntPtr h) { var d = Data(h); SHAppBarMessage(1, ref d); hasAsked = false; }
+    // reserve heightPx at the bottom of the primary screen (above the taskbar) and return the strip.
+    // SETPOS only when the strip changes: setting it notifies the other bars, which could echo back.
+    public static RECT DockBottom(IntPtr h, int heightPx) {
+        var d = Data(h); d.uEdge = 3;
+        d.rc.Left = 0; d.rc.Right = GetSystemMetrics(0); d.rc.Bottom = GetSystemMetrics(1); d.rc.Top = d.rc.Bottom - heightPx;
+        SHAppBarMessage(2, ref d);
+        d.rc.Top = d.rc.Bottom - heightPx;
+        if (hasAsked && d.rc.Left == asked.Left && d.rc.Top == asked.Top && d.rc.Right == asked.Right && d.rc.Bottom == asked.Bottom) return d.rc;
+        asked = d.rc; hasAsked = true;
+        SHAppBarMessage(3, ref d);
+        return d.rc;
+    }
+    public static void Attach(IntPtr h) { HwndSource.FromHwnd(h).AddHook(Hook); }
+    static IntPtr Hook(IntPtr h, int msg, IntPtr w, IntPtr l, ref bool handled) {
+        try {
+            if (Notify == null) { }
+            else if ((uint)msg == CallbackMsg) Notify(w.ToInt32(), l.ToInt64());
+            else if ((uint)msg == TaskbarCreated) Notify(-1, 0);
+        } catch { }
+        return IntPtr.Zero;
+    }
+}
+"@
+
 $GWL_EXSTYLE      = -20
 $WS_EX_TOOLWINDOW = 0x00000080
 $WS_EX_NOACTIVATE = 0x08000000
@@ -68,10 +118,10 @@ if ($DumpMetrics) {
 # ---- UI ----
 # ---- user settings (saved to %LOCALAPPDATA%\system-monitor\settings.json) ----
 $settingsFile = Join-Path $env:LOCALAPPDATA 'system-monitor\settings.json'
-$AppVersion = '1.3.1'
+$AppVersion = '1.3.2'
 $repoSlug   = 'thekaroe-thailand/system-monitor'
 # <Provider>Key values are DPAPI-encrypted (ConvertFrom-SecureString)
-$settings = @{ Transparency = 25; ShowCalendar = $true; ShowClaude = $true; Collapsed = $false
+$settings = @{ Transparency = 25; ShowCalendar = $true; ShowClaude = $true; Collapsed = $false; DockBar = $false
                AutoCheckUpdates = $true; LastUpdateCheck = 0; LatestTag = ''
                AutoInstallUpdates = $true; LastAutoAttemptTag = ''; LastAutoAttemptAt = 0
                LiveClaudeUsage = $false; ShowCodex = $true
@@ -264,7 +314,40 @@ foreach ($d in @(
     $keyProviders[$d.Id] = $d
 }
 
+# ---- dock: with DockBar on, the collapsed bar becomes a full-width AppBar above the taskbar ----
+$dockHeight = 30
+$dock = @{ On = $false; Rect = $null; FullScreen = $false; Screen = '' }
+
+function Get-Hwnd { (New-Object Windows.Interop.WindowInteropHelper $win).Handle }
+
+# register / release the strip to match the settings; -Force re-asks Windows for the strip (taskbar moved etc.)
+function Update-Dock([switch]$Force) {
+    $h = Get-Hwnd
+    if ($h -eq [IntPtr]::Zero) { return }
+    $want = $settings.Collapsed -and $settings.DockBar -and $win.Visibility -eq 'Visible'
+    if (-not $want) {
+        if ($dock.On) { [AppBar]::Remove($h); $dock.On = $false; $dock.Rect = $null; $dock.FullScreen = $false }
+        return
+    }
+    if (-not $dock.On) {
+        if (-not [AppBar]::Add($h)) { return }
+        $dock.On = $true; $Force = $true
+    }
+    $screen = '{0}x{1}' -f [Windows.SystemParameters]::PrimaryScreenWidth, [Windows.SystemParameters]::PrimaryScreenHeight
+    if (-not $Force -and $screen -eq $dock.Screen) { return }
+    $dock.Screen = $screen
+    $m = [Windows.PresentationSource]::FromVisual($win).CompositionTarget.TransformToDevice
+    $r = [AppBar]::DockBottom($h, [int][math]::Round($dockHeight * $m.M22))
+    $dock.Rect = New-Object Windows.Rect ($r.Left / $m.M11), ($r.Top / $m.M22), (($r.Right - $r.Left) / $m.M11), (($r.Bottom - $r.Top) / $m.M22)
+    Set-Position
+}
+
 function Set-Position {
+    if ($dock.On -and $dock.Rect) {
+        $r = $dock.Rect
+        $win.Left = $r.X; $win.Top = $r.Y; $win.Width = $r.Width; $win.Height = $r.Height
+        return
+    }
     $wa = [Windows.SystemParameters]::WorkArea
     $h = if ($win.ActualHeight -gt 0) { $win.ActualHeight } else { 192 }
     $w = if ($win.ActualWidth -gt 0) { $win.ActualWidth } else { 210 }
@@ -320,16 +403,27 @@ function Apply-Settings {
     $ui.Root.Background = New-Object Windows.Media.SolidColorBrush ([Windows.Media.Color]::FromArgb($alpha, 0x18, 0x18, 0x18))
     $ui.CalPanel.Visibility = if ($settings.ShowCalendar) { 'Visible' } else { 'Collapsed' }
     # collapsed = one-row status bar (CPU / RAM + a group per provider) instead of the full gadget;
-    # the bar sizes its own width, the full gadget is fixed at 210 wide
+    # the bar sizes its own width (docked: the strip Update-Dock gets), the full gadget is fixed at 210 wide
     $ui.FullPanel.Visibility = if ($settings.Collapsed) { 'Collapsed' } else { 'Visible' }
     $ui.MiniPanel.Visibility = if ($settings.Collapsed) { 'Visible' } else { 'Collapsed' }
-    if ($settings.Collapsed) {
-        $win.ClearValue([Windows.FrameworkElement]::WidthProperty); $win.SizeToContent = 'WidthAndHeight'
+    # undock before resizing / dock after: a resize runs Set-Position, which sizes the window to the strip while docked
+    $docked = $settings.Collapsed -and $settings.DockBar
+    if ($docked) {
+        $win.SizeToContent = 'Manual'
         $ui.Root.Padding = New-Object Windows.Thickness 10, 5, 10, 5
+        Update-Dock
     } else {
-        $win.SizeToContent = 'Height'; $win.Width = 210
-        $ui.Root.Padding = New-Object Windows.Thickness 10, 8, 10, 8
+        Update-Dock
+        $win.ClearValue([Windows.FrameworkElement]::HeightProperty)
+        if ($settings.Collapsed) {
+            $win.ClearValue([Windows.FrameworkElement]::WidthProperty); $win.SizeToContent = 'WidthAndHeight'
+            $ui.Root.Padding = New-Object Windows.Thickness 10, 5, 10, 5
+        } else {
+            $win.Width = 210; $win.SizeToContent = 'Height'
+            $ui.Root.Padding = New-Object Windows.Thickness 10, 8, 10, 8
+        }
     }
+    $ui.Root.CornerRadius = New-Object Windows.CornerRadius $(if ($docked) { 0 } else { 8 })
     $vis = if ($settings.ShowClaude) { 'Visible' } else { 'Collapsed' }
     $claudeSec.Panel.Visibility = $vis; $claudeSec.Mini.Visibility = $vis
     # Codex appears when its session folder exists ($codexState is set further down; null on the first call)
@@ -365,6 +459,9 @@ function Set-Collapsed([bool]$collapsed) {
         <Slider Name="TransSlider" Minimum="0" Maximum="90" TickFrequency="5" IsSnapToTickEnabled="True" Margin="0,6,0,2"/>
         <TextBlock Text="0% = solid, higher = more see-through" Foreground="#9AA0A6" FontSize="11" Margin="0,0,0,14"/>
         <CheckBox Name="ChkCal" Content="Show calendar" Foreground="White"/>
+        <CheckBox Name="ChkDock" Content="Dock the collapsed bar above the taskbar" Foreground="White" Margin="0,8,0,0"/>
+        <TextBlock Text="Like the taskbar: it spans the screen and keeps that space for itself, so maximized windows stop above it. Full-screen apps (games, videos) still cover it."
+                   Foreground="#6B7075" FontSize="10" TextWrapping="Wrap" Margin="22,2,0,0"/>
         <Rectangle Height="1" Fill="#33FFFFFF" Margin="0,14,0,12"/>
         <TextBlock Name="VerLabel" Foreground="#E8EAED" FontSize="13" FontWeight="SemiBold"/>
         <CheckBox Name="ChkUpdate" Content="Check for updates automatically (daily)" Foreground="White" Margin="0,8,0,8"/>
@@ -466,7 +563,7 @@ function Show-Settings([string]$tab = '') {
     $w = [Windows.Markup.XamlReader]::Load((New-Object Xml.XmlNodeReader $setXaml))
     $script:setWin = $w
     $script:setTabs = @()
-    foreach ($n in 'TabList','PageHost','PageGeneral','PageClaude','PageCodex','TransLabel','TransSlider','ChkCal','ChkClaude','ChkLive','ChkCodex','CodexStatus',
+    foreach ($n in 'TabList','PageHost','PageGeneral','PageClaude','PageCodex','TransLabel','TransSlider','ChkCal','ChkDock','ChkClaude','ChkLive','ChkCodex','CodexStatus',
                 'VerLabel','ChkUpdate','ChkAutoInstall','BtnCheck','BtnDoUpdate','UpdStatus') { $script:setUi[$n] = $w.FindName($n) }
     $script:setUi.TransSlider.Value = $settings.Transparency
     $script:setUi.TransLabel.Text = 'Transparency: {0}%' -f $settings.Transparency
@@ -478,6 +575,13 @@ function Show-Settings([string]$tab = '') {
         Apply-Settings; Save-Settings
     })
     $script:setUi.ChkCal.Add_Click({ $settings.ShowCalendar = [bool]$script:setUi.ChkCal.IsChecked; Apply-Settings; Save-Settings })
+    # turning it on also collapses the gadget, so the bar shows up right away
+    $script:setUi.ChkDock.IsChecked = [bool]$settings.DockBar
+    $script:setUi.ChkDock.Add_Click({
+        $settings.DockBar = [bool]$script:setUi.ChkDock.IsChecked
+        if ($settings.DockBar) { $settings.Collapsed = $true }
+        Set-Collapsed $settings.Collapsed
+    })
     $script:setUi.ChkClaude.Add_Click({ $settings.ShowClaude = [bool]$script:setUi.ChkClaude.IsChecked; Apply-Settings; Save-Settings })
     $script:setUi.VerLabel.Text = "System Monitor v$AppVersion"
     $w.Title = "System Monitor Settings - v$AppVersion"
@@ -540,12 +644,14 @@ $script:hideHintShown = $false
 function Toggle-Gadget {
     if ($win.Visibility -eq 'Visible') {
         $win.Visibility = 'Hidden'
+        Update-Dock   # hidden: give the strip back
         if (-not $script:hideHintShown) {
             $script:hideHintShown = $true
             $tray.ShowBalloonTip(2000, 'System Monitor', 'Click the tray icon to show it again.', [Windows.Forms.ToolTipIcon]::Info)
         }
     } else {
         $win.Visibility = 'Visible'
+        Update-Dock
         Set-Position
     }
 }
@@ -583,6 +689,8 @@ $tray.ContextMenuStrip = $trayMenu
 $tray.Add_MouseClick({ param($s, $e) if ($e.Button -eq [Windows.Forms.MouseButtons]::Left) { Toggle-Gadget } })
 $tray.Visible = $true
 $win.Add_Closed({ $tray.Visible = $false; $tray.Dispose() })
+# release the docked strip before the window goes (Closed is too late: the handle is gone)
+$win.Add_Closing({ if ($dock.On) { [AppBar]::Remove((Get-Hwnd)); $dock.On = $false } })
 
 Apply-Settings
 
@@ -590,8 +698,23 @@ $win.Add_SourceInitialized({
     $h = (New-Object Windows.Interop.WindowInteropHelper $win).Handle
     $ex = [Win32]::GetWindowLong($h, $GWL_EXSTYLE)
     [void][Win32]::SetWindowLong($h, $GWL_EXSTYLE, ($ex -bor $WS_EX_TOOLWINDOW -bor $WS_EX_NOACTIVATE))
+    [AppBar]::Attach($h)
+    Update-Dock
     Set-Position
 })
+# messages from the shell to the docked bar
+[AppBar]::Notify = [Action[int, long]]{
+    param($code, $lp)
+    if ($code -eq 2) {
+        # ABN_FULLSCREENAPP: step behind a full-screen app (HWND_BOTTOM also drops topmost); the timer restores it
+        $dock.FullScreen = $lp -ne 0
+        if ($dock.FullScreen) { [void][Win32]::SetWindowPos((Get-Hwnd), [IntPtr]1, 0, 0, 0, 0, 0x0013) }
+    } elseif ($code -eq -1) {
+        $dock.On = $false; Update-Dock   # Explorer restarted: register again
+    } else {
+        Update-Dock -Force   # taskbar moved / resized / auto-hide changed
+    }
+}
 # the collapsed bar grows / shrinks with its text: keep it anchored bottom-right
 $win.Add_SizeChanged({ Set-Position })
 
@@ -1228,8 +1351,10 @@ $update = {
     $ui.DiskText.Text = '{0}: {1}% ({2:N0} GB free)' -f $sysDrive, $m.DiskPct, $m.DiskFreeGB
     $ui.DiskBar.Value = $m.DiskPct
     $ui.NetText.Text  = [string]::Format([char]0x2193 + ' {0}  ' + [char]0x2191 + ' {1}', (Format-Speed $m.Down), (Format-Speed $m.Up))
-    # keep position (resolution / taskbar changes) and re-assert topmost
+    # keep position (resolution / taskbar changes) and re-assert topmost (not over a full-screen app when docked)
+    Update-Dock
     Set-Position
+    if ($dock.FullScreen) { return }
     $h = (New-Object Windows.Interop.WindowInteropHelper $win).Handle
     [void][Win32]::SetWindowPos($h, $HWND_TOPMOST, 0, 0, 0, 0, $SWP_FLAGS)
 }

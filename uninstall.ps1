@@ -1,5 +1,5 @@
 # system-monitor uninstaller. One-liner:
-#   powershell -NoProfile -Command "irm https://raw.githubusercontent.com/thekaroe-thailand/system-monitor/v1.3.1/uninstall.ps1 | iex"
+#   powershell -NoProfile -Command "irm https://raw.githubusercontent.com/thekaroe-thailand/system-monitor/v1.3.2/uninstall.ps1 | iex"
 # NOTE: keep this file ASCII-only.
 $installDir = Join-Path $env:LOCALAPPDATA 'Programs\system-monitor'
 $dataDir    = Join-Path $env:LOCALAPPDATA 'system-monitor'
