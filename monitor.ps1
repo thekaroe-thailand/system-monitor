@@ -42,14 +42,15 @@ public static class AppBar {
         return SHAppBarMessage(0, ref d) != UIntPtr.Zero;
     }
     public static void Remove(IntPtr h) { var d = Data(h); SHAppBarMessage(1, ref d); hasAsked = false; }
-    // reserve heightPx at the top or bottom of the primary screen (next to the taskbar if it is on that edge)
-    // and return the strip. SETPOS only when the strip changes: setting it notifies the other bars, which could echo back.
-    public static RECT Dock(IntPtr h, int heightPx, bool top) {
-        var d = Data(h); d.uEdge = top ? 1u : 3u;
-        d.rc.Left = 0; d.rc.Right = GetSystemMetrics(0);
-        if (top) { d.rc.Top = 0; d.rc.Bottom = heightPx; } else { d.rc.Bottom = GetSystemMetrics(1); d.rc.Top = d.rc.Bottom - heightPx; }
-        SHAppBarMessage(2, ref d);
-        if (top) d.rc.Bottom = d.rc.Top + heightPx; else d.rc.Top = d.rc.Bottom - heightPx;
+    // reserve sizePx (height at the top / bottom, width at the right) of the primary screen, next to the taskbar
+    // if it is on that edge, and return the strip. edge: 1 = top, 2 = right, 3 = bottom (ABE_*).
+    // SETPOS only when the strip changes: setting it notifies the other bars, which could echo back.
+    public static RECT Dock(IntPtr h, int sizePx, uint edge) {
+        var d = Data(h); d.uEdge = edge;
+        d.rc.Left = 0; d.rc.Top = 0; d.rc.Right = GetSystemMetrics(0); d.rc.Bottom = GetSystemMetrics(1);
+        if (edge == 1) d.rc.Bottom = sizePx; else if (edge == 3) d.rc.Top = d.rc.Bottom - sizePx; else d.rc.Left = d.rc.Right - sizePx;
+        SHAppBarMessage(2, ref d);   // QUERYPOS: the shell moves the strip off the taskbar (also shortens a side strip)
+        if (edge == 1) d.rc.Bottom = d.rc.Top + sizePx; else if (edge == 3) d.rc.Top = d.rc.Bottom - sizePx; else d.rc.Left = d.rc.Right - sizePx;
         if (hasAsked && d.rc.Left == asked.Left && d.rc.Top == asked.Top && d.rc.Right == asked.Right && d.rc.Bottom == asked.Bottom) return d.rc;
         asked = d.rc; hasAsked = true;
         SHAppBarMessage(3, ref d);
@@ -119,7 +120,7 @@ if ($DumpMetrics) {
 # ---- UI ----
 # ---- user settings (saved to %LOCALAPPDATA%\system-monitor\settings.json) ----
 $settingsFile = Join-Path $env:LOCALAPPDATA 'system-monitor\settings.json'
-$AppVersion = '1.3.3'
+$AppVersion = '1.4.0'
 $repoSlug   = 'thekaroe-thailand/system-monitor'
 # <Provider>Key values are DPAPI-encrypted (ConvertFrom-SecureString)
 $settings = @{ Transparency = 25; ShowCalendar = $true; ShowClaude = $true; Collapsed = $false; DockBar = $false; DockEdge = 'Top'
@@ -150,6 +151,7 @@ function Save-Settings {
       <ContextMenu>
         <MenuItem Name="MenuVer" IsEnabled="False"/>
         <Separator/>
+        <MenuItem Name="MenuRefresh" Header="Refresh now"/>
         <MenuItem Name="MenuSettings" Header="Settings..."/>
         <MenuItem Name="MenuHide" Header="Hide"/>
         <MenuItem Name="MenuExit" Header="Exit"/>
@@ -206,18 +208,30 @@ function Save-Settings {
     </StackPanel>
     </StackPanel>
     <Grid Name="MiniPanel" Visibility="Collapsed" Background="Transparent" Cursor="Hand" ToolTip="Click to expand">
+      <Grid.RowDefinitions><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
       <StackPanel Name="MiniStack" Orientation="Horizontal" VerticalAlignment="Center" Margin="0,0,20,0">
-        <StackPanel MinWidth="62" Margin="0,0,10,0" VerticalAlignment="Center">
+        <StackPanel Name="MiniCpuCell" MinWidth="62" Margin="0,0,10,0" VerticalAlignment="Center">
           <TextBlock Name="MiniCpuText" Foreground="White" FontSize="12"/>
           <ProgressBar Name="MiniCpuBar" Height="3" Maximum="100" Foreground="#4FC3F7" Background="#33FFFFFF" BorderThickness="0" Margin="0,2,0,0"/>
         </StackPanel>
-        <StackPanel MinWidth="62" VerticalAlignment="Center">
+        <StackPanel Name="MiniRamCell" MinWidth="62" VerticalAlignment="Center">
           <TextBlock Name="MiniRamText" Foreground="White" FontSize="12"/>
           <ProgressBar Name="MiniRamBar" Height="3" Maximum="100" Foreground="#81C784" Background="#33FFFFFF" BorderThickness="0" Margin="0,2,0,0"/>
         </StackPanel>
       </StackPanel>
       <TextBlock Name="MiniPlus" Foreground="#9AA0A6" FontFamily="Segoe UI Symbol" FontSize="13" Text="+"
                  HorizontalAlignment="Right" VerticalAlignment="Center" Padding="4,0"/>
+      <!-- small calendar at the bottom of the column (docked right only); clicks on it don't expand the gadget -->
+      <StackPanel Name="MiniCal" Grid.Row="1" Visibility="Collapsed" Background="Transparent" Cursor="Arrow"
+                  ToolTip="&lt; &gt; change the month, click the month name for today">
+        <Rectangle Height="1" Fill="#33FFFFFF" Margin="0,6,0,6"/>
+        <Grid>
+          <TextBlock Name="MiniCalPrev" Text="&lt;" Foreground="#9AA0A6" FontSize="11" Cursor="Hand" Padding="2,0" HorizontalAlignment="Left"/>
+          <TextBlock Name="MiniCalTitle" Foreground="White" FontSize="11" FontWeight="SemiBold" Cursor="Hand" HorizontalAlignment="Center"/>
+          <TextBlock Name="MiniCalNext" Text="&gt;" Foreground="#9AA0A6" FontSize="11" Cursor="Hand" Padding="2,0" HorizontalAlignment="Right"/>
+        </Grid>
+        <UniformGrid Name="MiniCalGrid" Columns="7" Margin="0,4,0,0"/>
+      </StackPanel>
     </Grid>
     </Grid>
   </Border>
@@ -226,7 +240,7 @@ function Save-Settings {
 
 $win = [Windows.Markup.XamlReader]::Load((New-Object Xml.XmlNodeReader $xaml))
 $ui = @{}
-foreach ($n in 'CpuText','CpuBar','RamText','RamBar','DiskText','DiskBar','NetText','CalPanel','CalPrev','CalTitle','CalNext','CalGrid','Root','MainGrid','VerText','MenuVer','BtnUpdate','BtnSettings','BtnHide','FullPanel','MiniPanel','MiniStack','MiniCpuText','MiniCpuBar','MiniRamText','MiniRamBar','MenuSettings','MenuHide','MenuExit','UsagePanel') { $ui[$n] = $win.FindName($n) }
+foreach ($n in 'CpuText','CpuBar','RamText','RamBar','DiskText','DiskBar','NetText','CalPanel','CalPrev','CalTitle','CalNext','CalGrid','Root','MainGrid','VerText','MenuVer','BtnUpdate','BtnSettings','BtnHide','FullPanel','MiniPanel','MiniStack','MiniPlus','MiniCal','MiniCalPrev','MiniCalTitle','MiniCalNext','MiniCalGrid','MiniCpuCell','MiniRamCell','MiniCpuText','MiniCpuBar','MiniRamText','MiniRamBar','MenuRefresh','MenuSettings','MenuHide','MenuExit','UsagePanel') { $ui[$n] = $win.FindName($n) }
 $ui.MenuExit.Add_Click({ $win.Close() })
 
 # ---- usage sections: one group per AI provider, built from the same template ----
@@ -260,20 +274,27 @@ $sectionXaml = @'
   </Grid>
 </StackPanel>
 '@
+# Docked at the right edge the same group turns into a block: divider on top, then the cells under each other
+# (Set-MiniLayout switches between the two).
 $miniXaml = @'
 <StackPanel xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" Orientation="Horizontal" ToolTip="{TITLE} - click to expand">
-  <Rectangle Width="1" Fill="#33FFFFFF" Margin="10,1"/>
-  <Ellipse Width="6" Height="6" Fill="{ACCENT}" VerticalAlignment="Center" Margin="0,0,5,0"/>
-  <StackPanel MinWidth="62" VerticalAlignment="Center">
-    <TextBlock Name="Text1" Foreground="White" FontSize="12"/>
-    <ProgressBar Name="Bar1" Height="3" Maximum="100" Foreground="#26A69A" Background="#33FFFFFF" BorderThickness="0" Margin="0,2,0,0"/>
-  </StackPanel>
-  <StackPanel Name="Cell2" MinWidth="62" Margin="10,0,0,0" VerticalAlignment="Center">
-    <TextBlock Name="Text2" Foreground="White" FontSize="12"/>
-    <ProgressBar Name="Bar2" Height="3" Maximum="100" Foreground="#26A69A" Background="#33FFFFFF" BorderThickness="0" Margin="0,2,0,0"/>
-  </StackPanel>
+  <Rectangle Name="Sep" Width="1" Fill="#33FFFFFF" Margin="10,1"/>
+  <DockPanel>
+    <Ellipse Name="Dot" Width="6" Height="6" Fill="{ACCENT}" VerticalAlignment="Center" Margin="0,0,5,0"/>
+    <StackPanel Name="Cells" Orientation="Horizontal" VerticalAlignment="Center">
+      <StackPanel Name="Cell1" MinWidth="62" VerticalAlignment="Center">
+        <TextBlock Name="Text1" Foreground="White" FontSize="12"/>
+        <ProgressBar Name="Bar1" Height="3" Maximum="100" Foreground="#26A69A" Background="#33FFFFFF" BorderThickness="0" Margin="0,2,0,0"/>
+      </StackPanel>
+      <StackPanel Name="Cell2" MinWidth="62" Margin="10,0,0,0" VerticalAlignment="Center">
+        <TextBlock Name="Text2" Foreground="White" FontSize="12"/>
+        <ProgressBar Name="Bar2" Height="3" Maximum="100" Foreground="#26A69A" Background="#33FFFFFF" BorderThickness="0" Margin="0,2,0,0"/>
+      </StackPanel>
+    </StackPanel>
+  </DockPanel>
 </StackPanel>
 '@
+$miniGroups = New-Object Collections.Generic.List[object]
 
 function New-UsageSection([string]$title, [string]$accent, [string]$lbl1 = '5hr', [string]$lbl2 = 'Week') {
     $t = [Security.SecurityElement]::Escape($title)
@@ -283,8 +304,37 @@ function New-UsageSection([string]$title, [string]$accent, [string]$lbl1 = '5hr'
     [void]$ui.MiniStack.Children.Add($mini)
     $s = @{ Panel = $full; Mini = $mini }
     foreach ($n in 'Note','Lbl1','Text1','Bar1','Row2','Lbl2','Text2','Bar2') { $s[$n] = $full.FindName($n) }
-    foreach ($n in 'Text1','Bar1','Cell2','Text2','Bar2') { $s["Mini$n"] = $mini.FindName($n) }
+    foreach ($n in 'Sep','Dot','Cells','Cell1','Text1','Bar1','Cell2','Text2','Bar2') { $s["Mini$n"] = $mini.FindName($n) }
+    $miniGroups.Add($s)
     $s
+}
+
+function New-Thickness([double]$l, [double]$t, [double]$r, [double]$b) { New-Object Windows.Thickness $l, $t, $r, $b }
+
+# collapsed bar layout: one row (floating / docked top or bottom) or one column (docked right)
+function Set-MiniLayout([bool]$side) {
+    $o = if ($side) { 'Vertical' } else { 'Horizontal' }
+    $ui.MiniStack.Orientation = $o
+    $ui.MiniStack.VerticalAlignment = if ($side) { 'Top' } else { 'Center' }
+    $ui.MiniStack.Margin = if ($side) { New-Thickness 0 20 0 0 } else { New-Thickness 0 0 20 0 }   # room for the + (top right when side)
+    $ui.MiniPlus.VerticalAlignment = if ($side) { 'Top' } else { 'Center' }
+    $ui.MiniCpuCell.Margin = if ($side) { New-Thickness 11 0 0 6 } else { New-Thickness 0 0 10 0 }
+    $ui.MiniRamCell.Margin = if ($side) { New-Thickness 11 0 0 0 } else { New-Thickness 0 0 0 0 }
+    $minW = if ($side) { 0 } else { 62 }
+    foreach ($c in $ui.MiniCpuCell, $ui.MiniRamCell) { $c.MinWidth = $minW }
+    foreach ($s in $miniGroups) {
+        $s.Mini.Orientation = $o; $s.MiniCells.Orientation = $o
+        $s.MiniCell1.MinWidth = $minW; $s.MiniCell2.MinWidth = $minW
+        if ($side) {
+            $s.MiniSep.Width = [double]::NaN; $s.MiniSep.Height = 1; $s.MiniSep.Margin = New-Thickness 0 8 0 8
+            $s.MiniDot.VerticalAlignment = 'Top'; $s.MiniDot.Margin = New-Thickness 0 5 5 0
+            $s.MiniCell2.Margin = New-Thickness 0 6 0 0
+        } else {
+            $s.MiniSep.Width = 1; $s.MiniSep.Height = [double]::NaN; $s.MiniSep.Margin = New-Thickness 10 1 10 1
+            $s.MiniDot.VerticalAlignment = 'Center'; $s.MiniDot.Margin = New-Thickness 0 0 5 0
+            $s.MiniCell2.Margin = New-Thickness 10 0 0 0
+        }
+    }
 }
 
 # gadget order: Claude, Codex, then the API-key providers
@@ -297,7 +347,7 @@ $keyProviders = [ordered]@{}
 foreach ($d in @(
     @{ Id = 'Ollama'; Title = 'Ollama Cloud'; Accent = '#B0BEC5'; KeyUrl = 'https://ollama.com/settings/keys'
        Urls = @('https://ollama.com/api/balance'); Labels = @('5hr', 'Week')
-       Info = 'Shows the session (5hr) and weekly limits, or the included credits used this month on newer plans.'
+       Info = 'Shows the session (5hr) and weekly limits on older plans. On the credit plans (e.g. Max) it shows how much of this month''s credits is used, when they refill, and the dollars left (purchased credits included).'
        Parse = { param($r) ConvertFrom-OllamaBalance $r[0] } }
     @{ Id = 'OpenRouter'; Title = 'OpenRouter'; Accent = '#8C8FF7'; KeyUrl = 'https://openrouter.ai/settings/keys'
        Urls = @('https://openrouter.ai/api/v1/key', 'https://openrouter.ai/api/v1/credits'); Labels = @('Left', '')
@@ -310,13 +360,16 @@ foreach ($d in @(
 )) {
     $d.AllUrls = $d.Urls; $d.Host = ([Uri]$d.Urls[0]).Host
     # first request a few seconds after start: starting a request blocks the UI briefly (proxy / DNS lookup)
-    $d.Tasks = $null; $d.TaskUrls = @(); $d.NextAt = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds() + 3; $d.View = $null; $d.Stamp = 0; $d.Error = ''; $d.P = @{}
+    $d.Tasks = $null; $d.TaskUrls = @(); $d.NextAt = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds() + 3; $d.LastAt = 0; $d.View = $null; $d.Stamp = 0; $d.Error = ''; $d.P = @{}
     $d.Sec = New-UsageSection $d.Title $d.Accent $d.Labels[0] $d.Labels[1]
     $keyProviders[$d.Id] = $d
 }
 
-# ---- dock: with DockBar on, the collapsed bar becomes a full-width AppBar at the top (DockEdge) or bottom ----
+# ---- dock: with DockBar on, the collapsed bar becomes an AppBar: a full-width strip at the top (DockEdge) or
+# bottom, or a column at the right edge (between the taskbar and the top of the screen) ----
 $dockHeight = 32
+$dockWidth  = 132
+function Get-DockEdge { if (@('Top', 'Bottom', 'Right') -contains $settings.DockEdge) { [string]$settings.DockEdge } else { 'Top' } }
 $dock = @{ On = $false; Rect = $null; FullScreen = $false; Screen = '' }
 
 function Get-Hwnd { (New-Object Windows.Interop.WindowInteropHelper $win).Handle }
@@ -334,12 +387,14 @@ function Update-Dock([switch]$Force) {
         if (-not [AppBar]::Add($h)) { return }
         $dock.On = $true; $Force = $true
     }
-    $top = $settings.DockEdge -ne 'Bottom'
-    $screen = '{0}x{1}|{2}' -f [Windows.SystemParameters]::PrimaryScreenWidth, [Windows.SystemParameters]::PrimaryScreenHeight, $top
+    $edge = Get-DockEdge
+    $screen = '{0}x{1}|{2}' -f [Windows.SystemParameters]::PrimaryScreenWidth, [Windows.SystemParameters]::PrimaryScreenHeight, $edge
     if (-not $Force -and $screen -eq $dock.Screen) { return }
     $dock.Screen = $screen
     $m = [Windows.PresentationSource]::FromVisual($win).CompositionTarget.TransformToDevice
-    $r = [AppBar]::Dock($h, [int][math]::Round($dockHeight * $m.M22), $top)
+    $code = switch ($edge) { 'Right' { 2 } 'Bottom' { 3 } default { 1 } }
+    $px = if ($edge -eq 'Right') { [math]::Round($dockWidth * $m.M11) } else { [math]::Round($dockHeight * $m.M22) }
+    $r = [AppBar]::Dock($h, [int]$px, [uint32]$code)
     $dock.Rect = New-Object Windows.Rect ($r.Left / $m.M11), ($r.Top / $m.M22), (($r.Right - $r.Left) / $m.M11), (($r.Bottom - $r.Top) / $m.M22)
     Set-Position
 }
@@ -364,14 +419,20 @@ $calBrush = New-Object Windows.Media.BrushConverter
 $calText = $calBrush.ConvertFromString('#E8EAED'); $calSun = $calBrush.ConvertFromString('#E57373')
 $calDim = $calBrush.ConvertFromString('#9AA0A6');  $calToday = $calBrush.ConvertFromString('#26A69A')
 
-function Add-CalCell([string]$text, $fg, $bg) {
+# the same month is drawn twice: in the full gadget and (smaller) at the bottom of the right-docked column
+$calViews = @(
+    @{ Grid = $ui.CalGrid;     Title = $ui.CalTitle;     Cell = 19; Font = 11 }
+    @{ Grid = $ui.MiniCalGrid; Title = $ui.MiniCalTitle; Cell = 16; Font = 10 }
+)
+
+function Add-CalCell($view, [string]$text, $fg, $bg) {
     $tb = New-Object Windows.Controls.TextBlock
-    $tb.Text = $text; $tb.FontSize = 11; $tb.Foreground = $fg
+    $tb.Text = $text; $tb.FontSize = $view.Font; $tb.Foreground = $fg
     $tb.HorizontalAlignment = 'Center'; $tb.VerticalAlignment = 'Center'
     $b = New-Object Windows.Controls.Border
-    $b.Height = 19; $b.CornerRadius = New-Object Windows.CornerRadius 9.5; $b.Child = $tb
+    $b.Height = $view.Cell; $b.CornerRadius = New-Object Windows.CornerRadius ($view.Cell / 2); $b.Child = $tb
     if ($bg) { $b.Background = $bg }
-    [void]$ui.CalGrid.Children.Add($b)
+    [void]$view.Grid.Children.Add($b)
 }
 
 function Update-Calendar {
@@ -380,24 +441,31 @@ function Update-Calendar {
     if ($key -eq $calState.Key) { return }
     $calState.Key = $key
     $first = [DateTime]::new($today.Year, $today.Month, 1).AddMonths($calState.Offset)
-    $ui.CalTitle.Text = $first.ToString('MMMM yyyy', $thai)
-    $ui.CalGrid.Children.Clear()
     $dn = $thai.DateTimeFormat.AbbreviatedDayNames
-    for ($i = 0; $i -lt 7; $i++) { Add-CalCell $dn[$i].TrimEnd('.') $(if ($i -eq 0) { $calSun } else { $calDim }) $null }
     $lead = [int]$first.DayOfWeek
     $days = [DateTime]::DaysInMonth($first.Year, $first.Month)
-    for ($c = 0; $c -lt 42; $c++) {
-        $d = $c - $lead + 1
-        if ($d -lt 1 -or $d -gt $days) { Add-CalCell '' $calText $null; continue }
-        $date = $first.AddDays($d - 1)
-        if ($date -eq $today) { Add-CalCell "$d" 'White' $calToday }
-        elseif ($date.DayOfWeek -eq 'Sunday') { Add-CalCell "$d" $calSun $null }
-        else { Add-CalCell "$d" $calText $null }
+    foreach ($v in $calViews) {
+        $v.Title.Text = $first.ToString('MMMM yyyy', $thai)
+        $v.Grid.Children.Clear()
+        for ($i = 0; $i -lt 7; $i++) { Add-CalCell $v $dn[$i].TrimEnd('.') $(if ($i -eq 0) { $calSun } else { $calDim }) $null }
+        for ($c = 0; $c -lt 42; $c++) {
+            $d = $c - $lead + 1
+            if ($d -lt 1 -or $d -gt $days) { Add-CalCell $v '' $calText $null; continue }
+            $date = $first.AddDays($d - 1)
+            if ($date -eq $today) { Add-CalCell $v "$d" 'White' $calToday }
+            elseif ($date.DayOfWeek -eq 'Sunday') { Add-CalCell $v "$d" $calSun $null }
+            else { Add-CalCell $v "$d" $calText $null }
+        }
     }
 }
 $ui.CalPrev.Add_MouseLeftButtonUp({ $calState.Offset--; Update-Calendar })
 $ui.CalNext.Add_MouseLeftButtonUp({ $calState.Offset++; Update-Calendar })
 $ui.CalTitle.Add_MouseLeftButtonUp({ $calState.Offset = 0; Update-Calendar })
+$ui.MiniCalPrev.Add_MouseLeftButtonUp({ $calState.Offset--; Update-Calendar })
+$ui.MiniCalNext.Add_MouseLeftButtonUp({ $calState.Offset++; Update-Calendar })
+$ui.MiniCalTitle.Add_MouseLeftButtonUp({ $calState.Offset = 0; Update-Calendar })
+# the click bubbles up to the column, which would expand the gadget
+$ui.MiniCal.Add_MouseLeftButtonUp({ param($s, $e) $e.Handled = $true })
 
 # ---- apply settings to the gadget ----
 function Apply-Settings {
@@ -410,9 +478,12 @@ function Apply-Settings {
     $ui.MiniPanel.Visibility = if ($settings.Collapsed) { 'Visible' } else { 'Collapsed' }
     # undock before resizing / dock after: a resize runs Set-Position, which sizes the window to the strip while docked
     $docked = $settings.Collapsed -and $settings.DockBar
+    $side = $docked -and (Get-DockEdge) -eq 'Right'
+    Set-MiniLayout $side
+    $ui.MiniCal.Visibility = if ($side -and $settings.ShowCalendar) { 'Visible' } else { 'Collapsed' }
     if ($docked) {
         $win.SizeToContent = 'Manual'
-        $ui.Root.Padding = New-Object Windows.Thickness 10, 5, 10, 5
+        $ui.Root.Padding = if ($side) { New-Thickness 10 8 10 8 } else { New-Thickness 10 5 10 5 }
         Update-Dock
     } else {
         Update-Dock
@@ -427,7 +498,7 @@ function Apply-Settings {
         }
     }
     $ui.Root.CornerRadius = New-Object Windows.CornerRadius $(if ($docked) { 0 } else { 8 })
-    $ui.MiniStack.HorizontalAlignment = if ($docked) { 'Right' } else { 'Left' }
+    $ui.MiniStack.HorizontalAlignment = if ($side) { 'Stretch' } elseif ($docked) { 'Right' } else { 'Left' }
     $vis = if ($settings.ShowClaude) { 'Visible' } else { 'Collapsed' }
     $claudeSec.Panel.Visibility = $vis; $claudeSec.Mini.Visibility = $vis
     # Codex appears when its session folder exists ($codexState is set further down; null on the first call)
@@ -467,8 +538,9 @@ function Set-Collapsed([bool]$collapsed) {
         <ComboBox Name="CmbDockEdge" Width="190" HorizontalAlignment="Left" Margin="22,4,0,0">
           <ComboBoxItem Tag="Top" Content="Top of the screen"/>
           <ComboBoxItem Tag="Bottom" Content="Bottom, above the taskbar"/>
+          <ComboBoxItem Tag="Right" Content="Right side (a column)"/>
         </ComboBox>
-        <TextBlock Text="Like the taskbar: it spans the screen and keeps that space for itself, so maximized windows don't cover it. Full-screen apps (games, videos) still cover it."
+        <TextBlock Text="Like the taskbar: it runs along that edge and keeps the space for itself, so maximized windows don't cover it. Full-screen apps (games, videos) still cover it."
                    Foreground="#6B7075" FontSize="10" TextWrapping="Wrap" Margin="22,2,0,0"/>
         <Rectangle Height="1" Fill="#33FFFFFF" Margin="0,14,0,12"/>
         <TextBlock Name="VerLabel" Foreground="#E8EAED" FontSize="13" FontWeight="SemiBold"/>
@@ -521,6 +593,7 @@ $keyPageXaml = @'
   <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
     <Button Name="BtnConnect" Content="Connect" Padding="10,3"/>
     <Button Name="BtnDisconnect" Content="Disconnect" Padding="10,3" Margin="8,0,0,0"/>
+    <Button Name="BtnRefresh" Content="Refresh now" Padding="10,3" Margin="8,0,0,0"/>
   </StackPanel>
   <TextBlock Name="Status" Foreground="#9AA0A6" FontSize="11" Margin="0,8,0,0" TextWrapping="Wrap"/>
   <TextBlock Text="{INFO}" Foreground="#9AA0A6" FontSize="11" TextWrapping="Wrap" Margin="0,10,0,0"/>
@@ -590,10 +663,11 @@ function Show-Settings([string]$tab = '') {
         if ($settings.DockBar) { $settings.Collapsed = $true }
         Set-Collapsed $settings.Collapsed
     })
-    $script:setUi.CmbDockEdge.SelectedIndex = if ($settings.DockEdge -eq 'Bottom') { 1 } else { 0 }
+    $script:setUi.CmbDockEdge.SelectedIndex = switch (Get-DockEdge) { 'Bottom' { 1 } 'Right' { 2 } default { 0 } }
     $script:setUi.CmbDockEdge.Add_SelectionChanged({
         $settings.DockEdge = [string]$script:setUi.CmbDockEdge.SelectedItem.Tag
-        Save-Settings; Update-Dock -Force
+        # Apply-Settings: switching between row and column also changes the bar's layout
+        Save-Settings; Apply-Settings; Update-Dock -Force
     })
     $script:setUi.ChkClaude.Add_Click({ $settings.ShowClaude = [bool]$script:setUi.ChkClaude.IsChecked; Apply-Settings; Save-Settings })
     $script:setUi.VerLabel.Text = "System Monitor v$AppVersion"
@@ -619,7 +693,7 @@ function Show-Settings([string]$tab = '') {
         $page = [Windows.Markup.XamlReader]::Parse($x)
         [void]$script:setUi.PageHost.Children.Add($page)
         $p.P = @{}
-        foreach ($n in 'ChkShow','KeyLink','KeyBox','BtnConnect','BtnDisconnect','Status') { $p.P[$n] = $page.FindName($n); $p.P[$n].Tag = $p.Id }
+        foreach ($n in 'ChkShow','KeyLink','KeyBox','BtnConnect','BtnDisconnect','BtnRefresh','Status') { $p.P[$n] = $page.FindName($n); $p.P[$n].Tag = $p.Id }
         $p.P.ChkShow.IsChecked = [bool]$settings["Show$($p.Id)"]
         # hidden = no requests either; showing it again refreshes right away
         $p.P.ChkShow.Add_Click({ param($s, $e) $q = $keyProviders[$s.Tag]; $settings["Show$($q.Id)"] = [bool]$s.IsChecked; $q.NextAt = 0; Apply-Settings; Save-Settings; Refresh-ProviderUi $q })
@@ -627,6 +701,8 @@ function Show-Settings([string]$tab = '') {
         $p.P.BtnConnect.Add_Click({ param($s, $e) $q = $keyProviders[$s.Tag]; Connect-Provider $q $q.P.KeyBox.Password })
         $p.P.KeyBox.Add_KeyDown({ param($s, $e) if ($e.Key -eq 'Return') { $q = $keyProviders[$s.Tag]; Connect-Provider $q $q.P.KeyBox.Password } })
         $p.P.BtnDisconnect.Add_Click({ param($s, $e) Disconnect-Provider $keyProviders[$s.Tag] })
+        # greyed out until the reply is in (Refresh-ProviderUi turns it back on)
+        $p.P.BtnRefresh.Add_Click({ param($s, $e) Request-Refresh $keyProviders[$s.Tag]; $s.IsEnabled = $false })
         Add-SettingsTab $p.Title $p.Accent $page
         Refresh-ProviderUi $p
     }
@@ -637,6 +713,7 @@ function Show-Settings([string]$tab = '') {
     $w.Show()
 }
 $ui.MenuSettings.Add_Click({ Show-Settings })
+$ui.MenuRefresh.Add_Click({ Request-Refresh })
 # version shown in: gadget corner, tooltips, right-click menu (tray + Settings title are set further down)
 $ui.VerText.Text = "v$AppVersion"
 $ui.MenuVer.Header = "System Monitor v$AppVersion"
@@ -693,9 +770,11 @@ $trayMenu = New-Object Windows.Forms.ContextMenuStrip
 $miVer = $trayMenu.Items.Add("System Monitor v$AppVersion"); $miVer.Enabled = $false
 [void]$trayMenu.Items.Add('-')
 $miToggle = $trayMenu.Items.Add('Show / Hide')
+$miRefr   = $trayMenu.Items.Add('Refresh now')
 $miSet    = $trayMenu.Items.Add('Settings...')
 $miExit   = $trayMenu.Items.Add('Exit')
 $miToggle.Add_Click({ Toggle-Gadget })
+$miRefr.Add_Click({ Request-Refresh })
 $miSet.Add_Click({ Show-Settings })
 $miExit.Add_Click({ $win.Close() })
 $tray.ContextMenuStrip = $trayMenu
@@ -906,7 +985,7 @@ function Start-Update {
 # Asks api.anthropic.com/api/oauth/usage (unofficial) with the Claude Code login token, so the numbers match
 # Claude even when it is only used through VS Code. The token file is only READ: refreshing the token here
 # would rotate Claude Code's own login, so an expired token just means "no live data" until Claude Code renews it.
-$liveState = @{ Task = $null; NextAt = 0; Data = $null; Stamp = 0; Error = '' }
+$liveState = @{ Task = $null; NextAt = 0; LastAt = 0; Data = $null; Stamp = 0; Error = '' }
 
 function Get-ClaudeToken {
     $p = Join-Path $env:USERPROFILE '.claude\.credentials.json'
@@ -941,7 +1020,7 @@ function Start-LiveUsage {
 function Update-LivePoll {
     $now = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
     if (-not $settings.LiveClaudeUsage) { $liveState.Data = $null; return }
-    if (-not $liveState.Task -and $now -ge $liveState.NextAt) { $liveState.NextAt = $now + 120; Start-LiveUsage }
+    if (-not $liveState.Task -and $now -ge $liveState.NextAt) { $liveState.NextAt = $now + 120; $liveState.LastAt = $now; Start-LiveUsage }
     $t = $liveState.Task
     if ($t -and $t.IsCompleted) {
         $liveState.Task = $null
@@ -960,7 +1039,7 @@ function Update-LivePoll {
 # ---- provider rows (Codex + API-key providers) ----
 # A view is @{ Rows = @(row, row); Note; Tip; Status }. A row is @{ Label; Pct (0-100, draws a bar);
 # ResetAt (epoch); Value (text, shown when there is no Pct or next to it); Mini (collapsed-bar text) }.
-function Get-Clamped([double]$v) { [math]::Min(100, [math]::Max(0, $v)) }
+function Get-Clamped([double]$v) { [math]::Min(100.0, [math]::Max(0.0, $v)) }
 
 function Set-ProviderRow($row, $lbl, $text, $bar, $mText, $mBar, [double]$ageSec, [string]$emptyText) {
     $now = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
@@ -1042,6 +1121,7 @@ function Refresh-ProviderUi($p) {
     $c = $p.P
     $hasKey = [bool]$settings["$($p.Id)Key"]
     $c.BtnDisconnect.IsEnabled = $hasKey
+    $c.BtnRefresh.IsEnabled = $hasKey -and $settings["Show$($p.Id)"] -and -not $p.Tasks
     $c.BtnConnect.Content = if ($hasKey) { 'Change key' } else { 'Connect' }
     $hint = switch ($p.Error) {
         'Invalid key'      { ' - paste a new key and press Change key.' }
@@ -1087,7 +1167,7 @@ function Start-KeyRequests($p) {
 function Update-KeyProvider($p) {
     if (-not ($settings["$($p.Id)Key"] -and $settings["Show$($p.Id)"])) { return }
     $now = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
-    if (-not $p.Tasks -and $now -ge $p.NextAt) { $p.NextAt = $now + 60; Start-KeyRequests $p }
+    if (-not $p.Tasks -and $now -ge $p.NextAt) { $p.NextAt = $now + 60; $p.LastAt = $now; Start-KeyRequests $p }
     if (-not $p.Tasks) { return }
     foreach ($t in $p.Tasks) { if (-not $t.IsCompleted) { return } }
     $tasks = $p.Tasks; $p.Tasks = $null
@@ -1132,6 +1212,19 @@ function Update-KeyProvider($p) {
     Refresh-ProviderUi $p
 }
 
+# "Refresh now" (right-click menu, tray, Settings): ask again on the next tick instead of waiting for the minute.
+# No provider (one, or all + live Claude + Codex) is asked more than once per 10 s; running requests are left alone.
+function Request-Refresh($only) {
+    foreach ($p in @(if ($only) { $only } else { $keyProviders.Values })) {
+        if ($p.Tasks) { continue }
+        $p.Urls = $p.AllUrls   # also retry an extra endpoint dropped earlier
+        $p.NextAt = [math]::Min($p.NextAt, $p.LastAt + 10)
+    }
+    if ($only) { return }
+    if (-not $liveState.Task) { $liveState.NextAt = [math]::Min($liveState.NextAt, $liveState.LastAt + 10) }
+    $codexState.NextScan = 0; $codexState.Sig = ''
+}
+
 function Update-KeyProviderRows($p) {
     if (-not ($settings["$($p.Id)Key"] -and $settings["Show$($p.Id)"])) { return }
     $v = $p.View
@@ -1140,7 +1233,7 @@ function Update-KeyProviderRows($p) {
     Show-ProviderRows $p.Sec $(if ($v) { $v.Rows }) $age $empty
     $p.Sec.Note.Text = if ($v) { [string]$v.Note } else { '' }
     $tip = if ($v -and $v.Tip) { $v.Tip } else { "$($p.Title)." }
-    $tip += if ($p.Error) { " $($p.Error) - see Settings." } else { ' Refreshed every minute.' }
+    $tip += if ($p.Error) { " $($p.Error) - see Settings." } else { ' Refreshed every minute (right-click > Refresh now to ask sooner).' }
     $p.Sec.Text1.ToolTip = $tip; $p.Sec.Text2.ToolTip = $tip
 }
 
@@ -1158,12 +1251,19 @@ function ConvertFrom-OllamaBalance([string]$json) {
         $used = ($rows | ForEach-Object { '{0} {1:N0}% used' -f $_.Label, $_.Pct }) -join ', '
         return @{ Rows = $rows; Note = $note; Tip = 'Ollama Cloud session (5hr) and weekly limits.'; Status = "Connected. $used." }
     }
+    # credit plans (e.g. Max: $300 a month): {"included":{"balance_usd","allowance_usd","period":{from,until}},"purchased":{balance_usd}}
+    # row 1 = share of this month's included credits used (bar + refill time), row 2 = dollars left incl. purchased
     if ($null -ne $inc.allowance_usd) {
-        $allow = [double]$inc.allowance_usd; $used = [math]::Max(0, $allow - [double]$inc.balance_usd)
+        $allow = [double]$inc.allowance_usd; $bal = [math]::Max(0.0, [double]$inc.balance_usd)
+        $used = [math]::Max(0.0, $allow - $bal)
         $pct = if ($allow -gt 0) { Get-Clamped ($used / $allow * 100) } else { 0 }
+        $left = '${0:N2}' -f ($bal + $purchased)
         $txt = '${0:N2} of ${1:N2}' -f $used, $allow
-        return @{ Rows = @(@{ Label = 'Month'; Pct = $pct; ResetAt = (Convert-ToEpoch $inc.period.until) }); Note = $note
-                  Tip = "Ollama Cloud: $txt included credits used this month."; Status = "Connected. $txt included credits used this month." }
+        $rows = @(@{ Label = 'Month'; Pct = $pct; ResetAt = (Convert-ToEpoch $inc.period.until) }
+                  @{ Label = 'Left'; Value = $left; Mini = "$left left" })
+        $detail = "$txt monthly credits used, $left left"
+        if ($purchased -gt 0) { $detail += (' (incl. ${0:N2} purchased)' -f $purchased) }
+        return @{ Rows = $rows; Note = $note; Tip = "Ollama Cloud: $detail."; Status = "Connected. $detail." }
     }
     throw 'unknown shape'
 }
@@ -1198,7 +1298,7 @@ function ConvertFrom-OpenRouterKey([string]$keyJson, [string]$creditsJson) {
     if ($null -ne $d.limit -and [double]$d.limit -gt 0) {
         $lim = [double]$d.limit
         $rem = if ($null -ne $d.limit_remaining) { [double]$d.limit_remaining } else { $lim - [double]$d.usage }
-        $used = [math]::Max(0, $lim - $rem)
+        $used = [math]::Max(0.0, $lim - $rem)
         $label = switch ([string]$d.limit_reset) { 'daily' { 'Day' } 'weekly' { 'Week' } 'monthly' { 'Month' } default { 'Limit' } }
         $rows += @{ Label = $label; Pct = (Get-Clamped ($used / $lim * 100)); ResetAt = (Get-NextUtcReset ([string]$d.limit_reset)); Value = ('${0:N2} of ${1:N2}' -f $used, $lim) }
     }
