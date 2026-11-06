@@ -120,7 +120,7 @@ if ($DumpMetrics) {
 # ---- UI ----
 # ---- user settings (saved to %LOCALAPPDATA%\system-monitor\settings.json) ----
 $settingsFile = Join-Path $env:LOCALAPPDATA 'system-monitor\settings.json'
-$AppVersion = '1.4.0'
+$AppVersion = '1.4.1'
 $repoSlug   = 'thekaroe-thailand/system-monitor'
 # <Provider>Key values are DPAPI-encrypted (ConvertFrom-SecureString)
 $settings = @{ Transparency = 25; ShowCalendar = $true; ShowClaude = $true; Collapsed = $false; DockBar = $false; DockEdge = 'Top'
@@ -226,9 +226,9 @@ function Save-Settings {
                   ToolTip="&lt; &gt; change the month, click the month name for today">
         <Rectangle Height="1" Fill="#33FFFFFF" Margin="0,6,0,6"/>
         <Grid>
-          <TextBlock Name="MiniCalPrev" Text="&lt;" Foreground="#9AA0A6" FontSize="11" Cursor="Hand" Padding="2,0" HorizontalAlignment="Left"/>
-          <TextBlock Name="MiniCalTitle" Foreground="White" FontSize="11" FontWeight="SemiBold" Cursor="Hand" HorizontalAlignment="Center"/>
-          <TextBlock Name="MiniCalNext" Text="&gt;" Foreground="#9AA0A6" FontSize="11" Cursor="Hand" Padding="2,0" HorizontalAlignment="Right"/>
+          <TextBlock Name="MiniCalPrev" Text="&lt;" Foreground="#9AA0A6" FontSize="14" Cursor="Hand" Padding="2,0" HorizontalAlignment="Left"/>
+          <TextBlock Name="MiniCalTitle" Foreground="White" FontSize="14" FontWeight="SemiBold" Cursor="Hand" HorizontalAlignment="Center"/>
+          <TextBlock Name="MiniCalNext" Text="&gt;" Foreground="#9AA0A6" FontSize="14" Cursor="Hand" Padding="2,0" HorizontalAlignment="Right"/>
         </Grid>
         <UniformGrid Name="MiniCalGrid" Columns="7" Margin="0,4,0,0"/>
       </StackPanel>
@@ -318,17 +318,26 @@ function Set-MiniLayout([bool]$side) {
     $ui.MiniStack.VerticalAlignment = if ($side) { 'Top' } else { 'Center' }
     $ui.MiniStack.Margin = if ($side) { New-Thickness 0 20 0 0 } else { New-Thickness 0 0 20 0 }   # room for the + (top right when side)
     $ui.MiniPlus.VerticalAlignment = if ($side) { 'Top' } else { 'Center' }
-    $ui.MiniCpuCell.Margin = if ($side) { New-Thickness 11 0 0 6 } else { New-Thickness 0 0 10 0 }
-    $ui.MiniRamCell.Margin = if ($side) { New-Thickness 11 0 0 0 } else { New-Thickness 0 0 0 0 }
+    $ui.MiniPlus.FontSize = if ($side) { 16 } else { 13 }
+    # the column is read from further away (next to a maximized window): bigger text, bars and dots
+    $font = if ($side) { 15 } else { 12 }; $barH = if ($side) { 5 } else { 3 }; $dot = if ($side) { 9 } else { 6 }
+    $indent = $dot + 5   # CPU / RAM line up with the provider cells (dot + its margin)
+    $ui.MiniCpuCell.Margin = if ($side) { New-Thickness $indent 0 0 8 } else { New-Thickness 0 0 10 0 }
+    $ui.MiniRamCell.Margin = if ($side) { New-Thickness $indent 0 0 0 } else { New-Thickness 0 0 0 0 }
     $minW = if ($side) { 0 } else { 62 }
     foreach ($c in $ui.MiniCpuCell, $ui.MiniRamCell) { $c.MinWidth = $minW }
+    foreach ($t in $ui.MiniCpuText, $ui.MiniRamText) { $t.FontSize = $font }
+    foreach ($b in $ui.MiniCpuBar, $ui.MiniRamBar) { $b.Height = $barH }
     foreach ($s in $miniGroups) {
         $s.Mini.Orientation = $o; $s.MiniCells.Orientation = $o
         $s.MiniCell1.MinWidth = $minW; $s.MiniCell2.MinWidth = $minW
+        $s.MiniText1.FontSize = $font; $s.MiniText2.FontSize = $font
+        $s.MiniBar1.Height = $barH; $s.MiniBar2.Height = $barH
+        $s.MiniDot.Width = $dot; $s.MiniDot.Height = $dot
         if ($side) {
-            $s.MiniSep.Width = [double]::NaN; $s.MiniSep.Height = 1; $s.MiniSep.Margin = New-Thickness 0 8 0 8
-            $s.MiniDot.VerticalAlignment = 'Top'; $s.MiniDot.Margin = New-Thickness 0 5 5 0
-            $s.MiniCell2.Margin = New-Thickness 0 6 0 0
+            $s.MiniSep.Width = [double]::NaN; $s.MiniSep.Height = 1; $s.MiniSep.Margin = New-Thickness 0 10 0 10
+            $s.MiniDot.VerticalAlignment = 'Top'; $s.MiniDot.Margin = New-Thickness 0 6 5 0
+            $s.MiniCell2.Margin = New-Thickness 0 8 0 0
         } else {
             $s.MiniSep.Width = 1; $s.MiniSep.Height = [double]::NaN; $s.MiniSep.Margin = New-Thickness 10 1 10 1
             $s.MiniDot.VerticalAlignment = 'Center'; $s.MiniDot.Margin = New-Thickness 0 0 5 0
@@ -368,7 +377,7 @@ foreach ($d in @(
 # ---- dock: with DockBar on, the collapsed bar becomes an AppBar: a full-width strip at the top (DockEdge) or
 # bottom, or a column at the right edge (between the taskbar and the top of the screen) ----
 $dockHeight = 32
-$dockWidth  = 132
+$dockWidth  = 168
 function Get-DockEdge { if (@('Top', 'Bottom', 'Right') -contains $settings.DockEdge) { [string]$settings.DockEdge } else { 'Top' } }
 $dock = @{ On = $false; Rect = $null; FullScreen = $false; Screen = '' }
 
@@ -422,7 +431,7 @@ $calDim = $calBrush.ConvertFromString('#9AA0A6');  $calToday = $calBrush.Convert
 # the same month is drawn twice: in the full gadget and (smaller) at the bottom of the right-docked column
 $calViews = @(
     @{ Grid = $ui.CalGrid;     Title = $ui.CalTitle;     Cell = 19; Font = 11 }
-    @{ Grid = $ui.MiniCalGrid; Title = $ui.MiniCalTitle; Cell = 16; Font = 10 }
+    @{ Grid = $ui.MiniCalGrid; Title = $ui.MiniCalTitle; Cell = 21; Font = 13 }
 )
 
 function Add-CalCell($view, [string]$text, $fg, $bg) {
