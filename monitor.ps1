@@ -120,19 +120,27 @@ if ($DumpMetrics) {
 # ---- UI ----
 # ---- user settings (saved to %LOCALAPPDATA%\system-monitor\settings.json) ----
 $settingsFile = Join-Path $env:LOCALAPPDATA 'system-monitor\settings.json'
-$AppVersion = '1.4.1'
+$AppVersion = '1.5.0'
 $repoSlug   = 'thekaroe-thailand/system-monitor'
 # <Provider>Key values are DPAPI-encrypted (ConvertFrom-SecureString)
 $settings = @{ Transparency = 25; ShowCalendar = $true; ShowClaude = $true; Collapsed = $false; DockBar = $false; DockEdge = 'Top'
                AutoCheckUpdates = $true; LastUpdateCheck = 0; LatestTag = ''
                AutoInstallUpdates = $true; LastAutoAttemptTag = ''; LastAutoAttemptAt = 0
                LiveClaudeUsage = $false; ShowCodex = $true
-               OllamaKey = ''; ShowOllama = $true; OpenRouterKey = ''; ShowOpenRouter = $true; DeepSeekKey = ''; ShowDeepSeek = $true }
+               OllamaKey = ''; ShowOllama = $true; OllamaName = ''; OpenRouterKey = ''; ShowOpenRouter = $true; DeepSeekKey = ''; ShowDeepSeek = $true
+               ExtraAccounts = '' }
+$saved = $null
 if (Test-Path $settingsFile) {
     try {
         $saved = Get-Content $settingsFile -Raw | ConvertFrom-Json
         foreach ($k in @($settings.Keys)) { if ($null -ne $saved.$k) { $settings[$k] = $saved.$k } }
     } catch { }
+}
+# more accounts of one provider ("Ollama2,Ollama3"): each keeps its own <Id>Key / Show<Id> / <Id>Name
+function Get-ExtraAccountIds { @(([string]$settings.ExtraAccounts) -split ',' | Where-Object { $_ -match '^[A-Za-z]+\d+$' } | Select-Object -Unique) }
+foreach ($id in (Get-ExtraAccountIds)) {
+    $settings["${id}Key"] = ''; $settings["Show$id"] = $true; $settings["${id}Name"] = ''
+    if ($saved) { foreach ($k in "${id}Key", "Show$id", "${id}Name") { if ($null -ne $saved.$k) { $settings[$k] = $saved.$k } } }
 }
 $settings.Transparency = [math]::Min(90, [math]::Max(0, [int]$settings.Transparency))
 
@@ -250,11 +258,12 @@ $sectionXaml = @'
 <StackPanel xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" Margin="0,8,0,0">
   <Rectangle Height="1" Fill="#33FFFFFF" Margin="0,0,0,5"/>
   <Grid>
-    <StackPanel Orientation="Horizontal">
-      <Ellipse Width="7" Height="7" Fill="{ACCENT}" VerticalAlignment="Center" Margin="0,1,6,0"/>
-      <TextBlock Text="{TITLE}" Foreground="#E8EAED" FontSize="11" FontWeight="SemiBold"/>
-    </StackPanel>
-    <TextBlock Name="Note" Foreground="#9AA0A6" FontSize="10" HorizontalAlignment="Right" VerticalAlignment="Center"/>
+    <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+    <DockPanel>
+      <Ellipse DockPanel.Dock="Left" Width="7" Height="7" Fill="{ACCENT}" VerticalAlignment="Center" Margin="0,1,6,0"/>
+      <TextBlock Name="Title" Text="{TITLE}" Foreground="#E8EAED" FontSize="11" FontWeight="SemiBold" TextTrimming="CharacterEllipsis"/>
+    </DockPanel>
+    <TextBlock Name="Note" Grid.Column="1" Foreground="#9AA0A6" FontSize="10" HorizontalAlignment="Right" VerticalAlignment="Center" Margin="6,0,0,0"/>
   </Grid>
   <Grid Height="29">
     <Grid.ColumnDefinitions><ColumnDefinition Width="42"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
@@ -296,17 +305,34 @@ $miniXaml = @'
 '@
 $miniGroups = New-Object Collections.Generic.List[object]
 
-function New-UsageSection([string]$title, [string]$accent, [string]$lbl1 = '5hr', [string]$lbl2 = 'Week') {
+# $after = an existing section to place this one right after (another account of the same provider)
+function New-UsageSection([string]$title, [string]$accent, [string]$lbl1 = '5hr', [string]$lbl2 = 'Week', $after = $null) {
     $t = [Security.SecurityElement]::Escape($title)
     $full = [Windows.Markup.XamlReader]::Parse($sectionXaml.Replace('{TITLE}', $t).Replace('{ACCENT}', $accent).Replace('{L1}', $lbl1).Replace('{L2}', $lbl2))
     $mini = [Windows.Markup.XamlReader]::Parse($miniXaml.Replace('{TITLE}', $t).Replace('{ACCENT}', $accent))
-    [void]$ui.UsagePanel.Children.Add($full)
-    [void]$ui.MiniStack.Children.Add($mini)
+    if ($after) {
+        $ui.UsagePanel.Children.Insert($ui.UsagePanel.Children.IndexOf($after.Panel) + 1, $full)
+        $ui.MiniStack.Children.Insert($ui.MiniStack.Children.IndexOf($after.Mini) + 1, $mini)
+    } else {
+        [void]$ui.UsagePanel.Children.Add($full)
+        [void]$ui.MiniStack.Children.Add($mini)
+    }
     $s = @{ Panel = $full; Mini = $mini }
-    foreach ($n in 'Note','Lbl1','Text1','Bar1','Row2','Lbl2','Text2','Bar2') { $s[$n] = $full.FindName($n) }
+    foreach ($n in 'Title','Note','Lbl1','Text1','Bar1','Row2','Lbl2','Text2','Bar2') { $s[$n] = $full.FindName($n) }
     foreach ($n in 'Sep','Dot','Cells','Cell1','Text1','Bar1','Cell2','Text2','Bar2') { $s["Mini$n"] = $mini.FindName($n) }
     $miniGroups.Add($s)
     $s
+}
+
+function Remove-UsageSection($s) {
+    $ui.UsagePanel.Children.Remove($s.Panel)
+    $ui.MiniStack.Children.Remove($s.Mini)
+    [void]$miniGroups.Remove($s)
+}
+
+function Set-UsageSectionTitle($s, [string]$title) {
+    $s.Title.Text = $title
+    $s.Mini.ToolTip = "$title - click to expand"
 }
 
 function New-Thickness([double]$l, [double]$t, [double]$r, [double]$b) { New-Object Windows.Thickness $l, $t, $r, $b }
@@ -352,9 +378,11 @@ $codexSec  = New-UsageSection 'Codex' '#10A37F'
 
 # API-key providers: settings "<Id>Key" + "Show<Id>"; Urls[0] is the main endpoint, extra Urls are optional.
 # Parse gets the reply bodies (null where an extra request failed) and returns a view (see Update-KeyProvider).
-$keyProviders = [ordered]@{}
+# Multi = more than one account can be added (Ollama2, Ollama3, ... in settings.ExtraAccounts), each with its own
+# key, name ("<Id>Name"), gadget group and Settings tab.
+$keyProviderDefs = [ordered]@{}
 foreach ($d in @(
-    @{ Id = 'Ollama'; Title = 'Ollama Cloud'; Accent = '#B0BEC5'; KeyUrl = 'https://ollama.com/settings/keys'
+    @{ Id = 'Ollama'; Title = 'Ollama Cloud'; Accent = '#B0BEC5'; KeyUrl = 'https://ollama.com/settings/keys'; Multi = $true
        Urls = @('https://ollama.com/api/balance'); Labels = @('5hr', 'Week')
        Info = 'Shows the session (5hr) and weekly limits on older plans. On the credit plans (e.g. Max) it shows how much of this month''s credits is used, when they refill, and the dollars left (purchased credits included).'
        Parse = { param($r) ConvertFrom-OllamaBalance $r[0] } }
@@ -366,12 +394,38 @@ foreach ($d in @(
        Urls = @('https://api.deepseek.com/user/balance'); Labels = @('Left', '')
        Info = 'Shows your remaining balance. DeepSeek is pay-as-you-go, so there is no 5hr / weekly limit.'
        Parse = { param($r) ConvertFrom-DeepSeekBalance $r[0] } }
-)) {
-    $d.AllUrls = $d.Urls; $d.Host = ([Uri]$d.Urls[0]).Host
+)) { $keyProviderDefs[$d.Id] = $d }
+
+# dot colors of the 2nd, 3rd, ... account, so the groups can be told apart in the collapsed bar
+$extraAccents = @('#F48FB1', '#FFD54F', '#80DEEA', '#CE93D8', '#A5D6A7', '#FFAB91')
+
+function Get-ProviderTitle($p) {
+    $n = ([string]$settings["$($p.Id)Name"]).Trim()
+    if ($n) { $n } else { $p.DefaultTitle }
+}
+
+# one account = one entry in $keyProviders (Id = 'Ollama' for the first, 'Ollama2', ... for the others)
+$keyProviders = [ordered]@{}
+function Add-KeyProvider($def, [string]$id) {
+    $p = $def.Clone()
+    $p.Id = $id; $p.Base = $def.Id
+    $num = if ($id -match '(\d+)$') { [int]$Matches[1] } else { 1 }
+    $p.DefaultTitle = if ($num -gt 1) { "$($def.Title) $num" } else { $def.Title }
+    if ($num -gt 1) { $p.Accent = $extraAccents[($num - 2) % $extraAccents.Count] }
+    $p.Title = Get-ProviderTitle $p
+    $p.Urls = $def.Urls; $p.AllUrls = $def.Urls; $p.Host = ([Uri]$def.Urls[0]).Host
     # first request a few seconds after start: starting a request blocks the UI briefly (proxy / DNS lookup)
-    $d.Tasks = $null; $d.TaskUrls = @(); $d.NextAt = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds() + 3; $d.LastAt = 0; $d.View = $null; $d.Stamp = 0; $d.Error = ''; $d.P = @{}
-    $d.Sec = New-UsageSection $d.Title $d.Accent $d.Labels[0] $d.Labels[1]
-    $keyProviders[$d.Id] = $d
+    $p.Tasks = $null; $p.TaskUrls = @(); $p.NextAt = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds() + 3; $p.LastAt = 0; $p.View = $null; $p.Stamp = 0; $p.Error = ''; $p.P = @{}
+    # keep the accounts of one provider together: right after its last account
+    $last = @($keyProviders.Values | Where-Object { $_.Base -eq $def.Id }) | Select-Object -Last 1
+    $p.Sec = New-UsageSection $p.Title $p.Accent $def.Labels[0] $def.Labels[1] $(if ($last) { $last.Sec })
+    if ($last) { $keyProviders.Insert(@($keyProviders.Keys).IndexOf($last.Id) + 1, $id, $p) } else { $keyProviders[$id] = $p }
+    $p
+}
+
+foreach ($d in $keyProviderDefs.Values) {
+    [void](Add-KeyProvider $d $d.Id)
+    if ($d.Multi) { foreach ($id in (Get-ExtraAccountIds)) { if (($id -replace '\d+$', '') -eq $d.Id) { [void](Add-KeyProvider $d $id) } } }
 }
 
 # ---- dock: with DockBar on, the collapsed bar becomes an AppBar: a full-width strip at the top (DockEdge) or
@@ -591,10 +645,14 @@ function Set-Collapsed([bool]$collapsed) {
 # page for an API-key provider (one per entry in $keyProviders)
 $keyPageXaml = @'
 <StackPanel xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" Visibility="Hidden">
-  <StackPanel Orientation="Horizontal">
-    <Ellipse Width="8" Height="8" Fill="{ACCENT}" VerticalAlignment="Center" Margin="0,1,7,0"/>
-    <TextBlock Text="{TITLE}" Foreground="#E8EAED" FontSize="14" FontWeight="SemiBold"/>
-  </StackPanel>
+  <DockPanel>
+    <Ellipse DockPanel.Dock="Left" Width="8" Height="8" Fill="{ACCENT}" VerticalAlignment="Center" Margin="0,1,7,0"/>
+    <TextBlock Name="Header" Text="{TITLE}" Foreground="#E8EAED" FontSize="14" FontWeight="SemiBold" TextTrimming="CharacterEllipsis"/>
+  </DockPanel>
+  <DockPanel Name="NameRow" Margin="0,10,0,0" Visibility="Collapsed">
+    <TextBlock DockPanel.Dock="Left" Text="Name" Foreground="#9AA0A6" FontSize="11" VerticalAlignment="Center" Margin="0,0,8,0"/>
+    <TextBox Name="NameBox" Padding="3,2" MaxLength="24" ToolTip="Shown in the gadget and on this tab. Clear it to use the default name. Press Enter to save."/>
+  </DockPanel>
   <CheckBox Name="ChkShow" Content="Show {TITLE} usage" Foreground="White" Margin="0,10,0,0"/>
   <TextBlock Foreground="#9AA0A6" FontSize="11" TextWrapping="Wrap" Margin="0,12,0,6">Paste an API key from
     <Hyperlink Name="KeyLink" Foreground="#4FC3F7">{KEYTEXT}</Hyperlink> and press Connect.</TextBlock>
@@ -608,6 +666,15 @@ $keyPageXaml = @'
   <TextBlock Text="{INFO}" Foreground="#9AA0A6" FontSize="11" TextWrapping="Wrap" Margin="0,10,0,0"/>
   <TextBlock Text="The key is stored encrypted for your Windows account and is only sent to {HOST} (checked once a minute)."
              Foreground="#6B7075" FontSize="10" TextWrapping="Wrap" Margin="0,6,0,0"/>
+  <StackPanel Name="AcctRow" Visibility="Collapsed">
+    <Rectangle Height="1" Fill="#33FFFFFF" Margin="0,12,0,10"/>
+    <StackPanel Orientation="Horizontal">
+      <Button Name="BtnAddAcct" Content="Add another account" Padding="10,3"/>
+      <Button Name="BtnRemoveAcct" Content="Remove this account" Padding="10,3" Margin="8,0,0,0"/>
+    </StackPanel>
+    <TextBlock Text="More than one account? Each one gets its own key, name, tab here and group in the gadget."
+               Foreground="#6B7075" FontSize="10" TextWrapping="Wrap" Margin="0,6,0,0"/>
+  </StackPanel>
 </StackPanel>
 '@
 $script:setWin  = $null
@@ -616,36 +683,128 @@ $script:setTabs = @()
 $script:setTab  = 'General'
 $tabOnBrush = (New-Object Windows.Media.BrushConverter).ConvertFromString('#33FFFFFF')
 
-function Add-SettingsTab([string]$title, [string]$accent, $page) {
+# $key names the tab (General / Claude / Codex / provider id); the title shown can change (account names).
+# $afterKey = place the tab right after that one (a new account goes next to the provider's other accounts).
+function Add-SettingsTab([string]$key, [string]$title, [string]$accent, $page, [string]$afterKey = '') {
     $b = New-Object Windows.Controls.Border
     $b.CornerRadius = New-Object Windows.CornerRadius 4
     $b.Padding = New-Object Windows.Thickness 8, 6, 8, 6
     $b.Margin = New-Object Windows.Thickness 0, 0, 0, 2
     $b.Cursor = [Windows.Input.Cursors]::Hand
     $b.Background = [Windows.Media.Brushes]::Transparent
-    $b.Tag = $title
-    $sp = New-Object Windows.Controls.StackPanel
-    $sp.Orientation = 'Horizontal'
+    $b.Tag = $key
+    $sp = New-Object Windows.Controls.DockPanel
     $dot = New-Object Windows.Shapes.Ellipse
     $dot.Width = 7; $dot.Height = 7; $dot.VerticalAlignment = 'Center'; $dot.Margin = New-Object Windows.Thickness 0, 1, 8, 0
     $dot.Fill = if ($accent) { (New-Object Windows.Media.BrushConverter).ConvertFromString($accent) } else { [Windows.Media.Brushes]::Transparent }
     $tb = New-Object Windows.Controls.TextBlock
-    $tb.Text = $title; $tb.Foreground = $calText; $tb.FontSize = 12
+    $tb.Text = $title; $tb.Foreground = $calText; $tb.FontSize = 12; $tb.TextTrimming = 'CharacterEllipsis'
     [void]$sp.Children.Add($dot); [void]$sp.Children.Add($tb)
     $b.Child = $sp
     $b.Add_MouseLeftButtonUp({ param($s, $e) Select-SettingsTab $s.Tag })
-    [void]$script:setUi.TabList.Children.Add($b)
-    $script:setTabs += @{ Title = $title; Tab = $b; Page = $page }
+    $after = $script:setTabs | Where-Object { $_.Key -eq $afterKey } | Select-Object -First 1
+    if ($after) { $script:setUi.TabList.Children.Insert($script:setUi.TabList.Children.IndexOf($after.Tab) + 1, $b) }
+    else { [void]$script:setUi.TabList.Children.Add($b) }
+    $script:setTabs += @{ Key = $key; Tab = $b; Page = $page; Text = $tb }
 }
 
-function Select-SettingsTab([string]$title) {
-    if (-not ($script:setTabs | Where-Object { $_.Title -eq $title })) { $title = 'General' }
-    $script:setTab = $title
+function Remove-SettingsTab([string]$key) {
+    foreach ($t in @($script:setTabs | Where-Object { $_.Key -eq $key })) {
+        $script:setUi.TabList.Children.Remove($t.Tab)
+        $script:setUi.PageHost.Children.Remove($t.Page)
+    }
+    $script:setTabs = @($script:setTabs | Where-Object { $_.Key -ne $key })
+}
+
+function Select-SettingsTab([string]$key) {
+    if (-not ($script:setTabs | Where-Object { $_.Key -eq $key })) { $key = 'General' }
+    $script:setTab = $key
     foreach ($t in $script:setTabs) {
-        $on = $t.Title -eq $title
+        $on = $t.Key -eq $key
         $t.Page.Visibility = if ($on) { 'Visible' } else { 'Hidden' }
         $t.Tab.Background = if ($on) { $tabOnBrush } else { [Windows.Media.Brushes]::Transparent }
     }
+}
+
+# Settings page of one API-key provider account; its controls find the account again through .Tag = provider id
+function Add-ProviderPage($p, [string]$afterKey = '') {
+    $esc = { param($v) [Security.SecurityElement]::Escape([string]$v) }
+    $x = $keyPageXaml.Replace('{TITLE}', (& $esc $p.Title)).Replace('{ACCENT}', $p.Accent).Replace('{HOST}', (& $esc $p.Host))
+    $x = $x.Replace('{KEYTEXT}', (& $esc ($p.KeyUrl -replace '^https://', ''))).Replace('{INFO}', (& $esc $p.Info))
+    $page = [Windows.Markup.XamlReader]::Parse($x)
+    [void]$script:setUi.PageHost.Children.Add($page)
+    $p.P = @{}
+    foreach ($n in 'Header','NameRow','NameBox','ChkShow','KeyLink','KeyBox','BtnConnect','BtnDisconnect','BtnRefresh','Status','AcctRow','BtnAddAcct','BtnRemoveAcct') {
+        $p.P[$n] = $page.FindName($n); $p.P[$n].Tag = $p.Id
+    }
+    $p.P.ChkShow.IsChecked = [bool]$settings["Show$($p.Id)"]
+    # hidden = no requests either; showing it again refreshes right away
+    $p.P.ChkShow.Add_Click({ param($s, $e) $q = $keyProviders[$s.Tag]; $settings["Show$($q.Id)"] = [bool]$s.IsChecked; $q.NextAt = 0; Apply-Settings; Save-Settings; Refresh-ProviderUi $q })
+    $p.P.KeyLink.Add_Click({ param($s, $e) Start-Process $keyProviders[$s.Tag].KeyUrl })
+    $p.P.BtnConnect.Add_Click({ param($s, $e) $q = $keyProviders[$s.Tag]; Connect-Provider $q $q.P.KeyBox.Password })
+    $p.P.KeyBox.Add_KeyDown({ param($s, $e) if ($e.Key -eq 'Return') { $q = $keyProviders[$s.Tag]; Connect-Provider $q $q.P.KeyBox.Password } })
+    $p.P.BtnDisconnect.Add_Click({ param($s, $e) Disconnect-Provider $keyProviders[$s.Tag] })
+    # greyed out until the reply is in (Refresh-ProviderUi turns it back on)
+    $p.P.BtnRefresh.Add_Click({ param($s, $e) Request-Refresh $keyProviders[$s.Tag]; $s.IsEnabled = $false })
+    if ($p.Multi) {
+        $p.P.NameRow.Visibility = 'Visible'; $p.P.AcctRow.Visibility = 'Visible'
+        $p.P.NameBox.Text = $p.Title
+        $p.P.NameBox.Add_LostFocus({ param($s, $e) if ($keyProviders.Contains($s.Tag)) { Rename-Provider $keyProviders[$s.Tag] $s.Text } })
+        $p.P.NameBox.Add_KeyDown({ param($s, $e) if ($e.Key -eq 'Return') { Rename-Provider $keyProviders[$s.Tag] $s.Text } })
+        $p.P.BtnAddAcct.Add_Click({ param($s, $e) Add-ProviderAccount $keyProviders[$s.Tag].Base })
+        # the first account stays (Disconnect clears its key); the others can be removed
+        $p.P.BtnRemoveAcct.Visibility = if ($p.Id -ne $p.Base) { 'Visible' } else { 'Collapsed' }
+        $p.P.BtnRemoveAcct.Add_Click({ param($s, $e) Remove-ProviderAccount $keyProviders[$s.Tag] })
+    }
+    Add-SettingsTab $p.Id $p.Title $p.Accent $page $afterKey
+    Refresh-ProviderUi $p
+}
+
+function Rename-Provider($p, [string]$name) {
+    $name = $name.Trim()
+    if ($name -eq $p.DefaultTitle) { $name = '' }
+    if ($name -ne [string]$settings["$($p.Id)Name"]) {
+        $settings["$($p.Id)Name"] = $name
+        Save-Settings
+        $p.Title = Get-ProviderTitle $p
+        Set-UsageSectionTitle $p.Sec $p.Title
+    }
+    if ($script:setWin -and $p.P.Header) {
+        $p.P.Header.Text = $p.Title; $p.P.ChkShow.Content = "Show $($p.Title) usage"; $p.P.NameBox.Text = $p.Title
+        foreach ($t in $script:setTabs) { if ($t.Key -eq $p.Id) { $t.Text.Text = $p.Title } }
+    }
+}
+
+function Add-ProviderAccount([string]$base) {
+    $def = $keyProviderDefs[$base]
+    $n = 2; while ($keyProviders.Contains("$base$n")) { $n++ }
+    $id = "$base$n"
+    $settings["${id}Key"] = ''; $settings["Show$id"] = $true; $settings["${id}Name"] = ''
+    $settings.ExtraAccounts = (@(Get-ExtraAccountIds) + $id) -join ','
+    Save-Settings
+    $prev = @($keyProviders.Values | Where-Object { $_.Base -eq $base }) | Select-Object -Last 1
+    $p = Add-KeyProvider $def $id
+    Apply-Settings   # new group gets the current bar layout (stays hidden until a key is connected)
+    if ($script:setWin) {
+        Add-ProviderPage $p $prev.Id
+        Select-SettingsTab $id
+        [void]$p.P.KeyBox.Focus()
+    }
+}
+
+function Remove-ProviderAccount($p) {
+    if (-not $p -or $p.Id -eq $p.Base) { return }
+    $owner = if ($script:setWin) { $script:setWin } else { $win }
+    $r = [Windows.MessageBox]::Show($owner, "Remove the account `"$($p.Title)`"? Its saved key is deleted from this PC.", 'System Monitor', 'YesNo', 'Question')
+    if ($r -ne 'Yes') { return }
+    $keyProviders.Remove($p.Id)
+    foreach ($k in "$($p.Id)Key", "Show$($p.Id)", "$($p.Id)Name") { $settings.Remove($k) }
+    $settings.ExtraAccounts = @(Get-ExtraAccountIds | Where-Object { $_ -ne $p.Id }) -join ','
+    Save-Settings
+    $p.Tasks = $null
+    Remove-UsageSection $p.Sec
+    if ($script:setWin) { Remove-SettingsTab $p.Id; Select-SettingsTab $p.Base }
+    Apply-Settings
 }
 
 function Show-Settings([string]$tab = '') {
@@ -691,30 +850,11 @@ function Show-Settings([string]$tab = '') {
     $script:setUi.BtnDoUpdate.Add_Click({ Start-Update })
     $script:setUi.ChkCodex.IsChecked = [bool]$settings.ShowCodex
     $script:setUi.ChkCodex.Add_Click({ $settings.ShowCodex = [bool]$script:setUi.ChkCodex.IsChecked; $codexState.NextScan = 0; $codexState.Sig = ''; Apply-Settings; Save-Settings; Refresh-CodexUi })
-    Add-SettingsTab 'General' '' $script:setUi.PageGeneral
-    Add-SettingsTab 'Claude' '#D97757' $script:setUi.PageClaude
-    Add-SettingsTab 'Codex' '#10A37F' $script:setUi.PageCodex
-    # one page per API-key provider; controls find their provider again through .Tag = provider id
-    $esc = { param($v) [Security.SecurityElement]::Escape([string]$v) }
-    foreach ($p in $keyProviders.Values) {
-        $x = $keyPageXaml.Replace('{TITLE}', (& $esc $p.Title)).Replace('{ACCENT}', $p.Accent).Replace('{HOST}', (& $esc $p.Host))
-        $x = $x.Replace('{KEYTEXT}', (& $esc ($p.KeyUrl -replace '^https://', ''))).Replace('{INFO}', (& $esc $p.Info))
-        $page = [Windows.Markup.XamlReader]::Parse($x)
-        [void]$script:setUi.PageHost.Children.Add($page)
-        $p.P = @{}
-        foreach ($n in 'ChkShow','KeyLink','KeyBox','BtnConnect','BtnDisconnect','BtnRefresh','Status') { $p.P[$n] = $page.FindName($n); $p.P[$n].Tag = $p.Id }
-        $p.P.ChkShow.IsChecked = [bool]$settings["Show$($p.Id)"]
-        # hidden = no requests either; showing it again refreshes right away
-        $p.P.ChkShow.Add_Click({ param($s, $e) $q = $keyProviders[$s.Tag]; $settings["Show$($q.Id)"] = [bool]$s.IsChecked; $q.NextAt = 0; Apply-Settings; Save-Settings; Refresh-ProviderUi $q })
-        $p.P.KeyLink.Add_Click({ param($s, $e) Start-Process $keyProviders[$s.Tag].KeyUrl })
-        $p.P.BtnConnect.Add_Click({ param($s, $e) $q = $keyProviders[$s.Tag]; Connect-Provider $q $q.P.KeyBox.Password })
-        $p.P.KeyBox.Add_KeyDown({ param($s, $e) if ($e.Key -eq 'Return') { $q = $keyProviders[$s.Tag]; Connect-Provider $q $q.P.KeyBox.Password } })
-        $p.P.BtnDisconnect.Add_Click({ param($s, $e) Disconnect-Provider $keyProviders[$s.Tag] })
-        # greyed out until the reply is in (Refresh-ProviderUi turns it back on)
-        $p.P.BtnRefresh.Add_Click({ param($s, $e) Request-Refresh $keyProviders[$s.Tag]; $s.IsEnabled = $false })
-        Add-SettingsTab $p.Title $p.Accent $page
-        Refresh-ProviderUi $p
-    }
+    Add-SettingsTab 'General' 'General' '' $script:setUi.PageGeneral
+    Add-SettingsTab 'Claude' 'Claude' '#D97757' $script:setUi.PageClaude
+    Add-SettingsTab 'Codex' 'Codex' '#10A37F' $script:setUi.PageCodex
+    # one page per API-key provider account
+    foreach ($p in @($keyProviders.Values)) { Add-ProviderPage $p }
     Select-SettingsTab $(if ($tab) { $tab } else { $script:setTab })
     Refresh-UpdateUi
     Refresh-CodexUi
