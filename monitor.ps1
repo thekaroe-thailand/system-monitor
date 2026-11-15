@@ -120,7 +120,7 @@ if ($DumpMetrics) {
 # ---- UI ----
 # ---- user settings (saved to %LOCALAPPDATA%\system-monitor\settings.json) ----
 $settingsFile = Join-Path $env:LOCALAPPDATA 'system-monitor\settings.json'
-$AppVersion = '1.5.0'
+$AppVersion = '1.5.1'
 $repoSlug   = 'thekaroe-thailand/system-monitor'
 # <Provider>Key values are DPAPI-encrypted (ConvertFrom-SecureString)
 $settings = @{ Transparency = 25; ShowCalendar = $true; ShowClaude = $true; Collapsed = $false; DockBar = $false; DockEdge = 'Top'
@@ -623,7 +623,7 @@ function Set-Collapsed([bool]$collapsed) {
         </StackPanel>
         <CheckBox Name="ChkClaude" Content="Show Claude usage (5hr / Week)" Foreground="White" Margin="0,10,0,0"/>
         <CheckBox Name="ChkLive" Content="Live usage (uses your Claude login)" Foreground="White" Margin="0,8,0,0"/>
-        <TextBlock Text="Off by default. Reads the login token in ~\.claude\.credentials.json (read-only) and asks api.anthropic.com every 2 minutes, so the numbers match Claude even when you only use VS Code. Unofficial endpoint: it may stop working."
+        <TextBlock Text="Off by default. Reads the login token in ~\.claude\.credentials.json (read-only) and asks api.anthropic.com every 5 minutes (longer if Anthropic asks it to wait), so the numbers match Claude even when you only use VS Code. Unofficial endpoint: it may stop working."
                    Foreground="#6B7075" FontSize="10" TextWrapping="Wrap" Margin="22,2,0,0"/>
         <TextBlock Text="With Live off, the numbers come from Claude Code's statusLine and only update while you use the Claude CLI."
                    Foreground="#9AA0A6" FontSize="11" TextWrapping="Wrap" Margin="0,12,0,0"/>
@@ -984,7 +984,7 @@ function Format-Remaining([double]$sec) {
 function Set-MiniUsage($limit, [string]$label, $text, $bar, [double]$ageSec) {
     $reset = if ($limit) { [double]$limit.resets_at } else { 0 }
     if ($reset -gt 1e11) { $reset = $reset / 1000 }
-    if (-not $limit -or $reset -le [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()) { $text.Text = "$label --"; $bar.Value = 0; return }
+    if (-not $limit -or $reset -le [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()) { $text.Text = "$label --"; $text.Foreground = $calDim; $bar.Value = 0; return }
     $pct = [math]::Round([double]$limit.used_percentage, 0)
     if ($ageSec -gt $staleAfterSec) {
         $text.Text = '{0} {1}%*' -f $label, $pct   # * = old data, not live
@@ -1010,8 +1010,12 @@ function Set-UsageRow($limit, $text, $bar, [double]$ageSec) {
     $reset = if ($limit) { [double]$limit.resets_at } else { 0 }
     if ($reset -gt 1e11) { $reset = $reset / 1000 }
     if (-not $limit -or $reset -le $now) {
-        # no usable data: with Live off, point at the setting instead of a bare "--"
-        if ($settings.LiveClaudeUsage) { $text.Text = '--' } else { $text.Text = 'Live off - see Settings'; $text.Foreground = $calDim }
+        # no usable data: say why instead of a bare "--" (the tooltip has the details)
+        $text.Text = if (-not $settings.LiveClaudeUsage) { 'Live off - see Settings' }
+                     elseif ($liveState.Error -like 'rate limited*') { 'Rate limited - waiting' }
+                     elseif ($liveState.Error) { 'Live failed - see tooltip' }
+                     else { '--' }
+        $text.Foreground = $calDim
         $bar.Value = 0; return
     }
     $pct = [math]::Round([double]$limit.used_percentage, 0)
@@ -1134,7 +1138,10 @@ function Start-Update {
 # Asks api.anthropic.com/api/oauth/usage (unofficial) with the Claude Code login token, so the numbers match
 # Claude even when it is only used through VS Code. The token file is only READ: refreshing the token here
 # would rotate Claude Code's own login, so an expired token just means "no live data" until Claude Code renews it.
-$liveState = @{ Task = $null; NextAt = 0; LastAt = 0; Data = $null; Stamp = 0; Error = '' }
+# The endpoint is rate limited per login (Claude Code itself uses it too): ask every 5 minutes, and after a 429
+# wait as long as its Retry-After says (RetryAt) - asking again sooner only keeps the limit going.
+$liveInterval = 300
+$liveState = @{ Task = $null; NextAt = 0; LastAt = 0; RetryAt = 0; Data = $null; Stamp = 0; Error = '' }
 
 function Get-ClaudeToken {
     $p = Join-Path $env:USERPROFILE '.claude\.credentials.json'
@@ -1166,14 +1173,33 @@ function Start-LiveUsage {
     $liveState.Task = $wc.DownloadStringTaskAsync('https://api.anthropic.com/api/oauth/usage')
 }
 
+function Get-LiveError {
+    $wait = $liveState.RetryAt - [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
+    if ($liveState.Error -and $wait -gt 0) { "$($liveState.Error), retrying in $(Format-Remaining $wait)" } else { $liveState.Error }
+}
+
 function Update-LivePoll {
     $now = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
     if (-not $settings.LiveClaudeUsage) { $liveState.Data = $null; return }
-    if (-not $liveState.Task -and $now -ge $liveState.NextAt) { $liveState.NextAt = $now + 120; $liveState.LastAt = $now; Start-LiveUsage }
+    if (-not $liveState.Task -and $now -ge $liveState.NextAt -and $now -ge $liveState.RetryAt) { $liveState.NextAt = $now + $liveInterval; $liveState.LastAt = $now; Start-LiveUsage }
     $t = $liveState.Task
     if ($t -and $t.IsCompleted) {
         $liveState.Task = $null
-        if ($t.IsFaulted -or $t.IsCanceled) { $liveState.Error = 'request failed'; $liveState.NextAt = $now + 300; return }
+        if ($t.IsFaulted -or $t.IsCanceled) {
+            $code = Get-HttpStatus $t
+            if ($code -eq 429) {
+                $retry = 0
+                try { [void][int]::TryParse([string]$t.Exception.InnerException.Response.Headers['Retry-After'], [ref]$retry) } catch { }
+                $liveState.RetryAt = $now + [math]::Max($liveInterval, $retry)
+                $liveState.Error = 'rate limited by Anthropic'   # Get-LiveError adds the time left
+            } elseif ($code -eq 401) {
+                $liveState.Error = 'Claude login expired - open Claude Code to renew it'; $liveState.NextAt = $now + $liveInterval
+            } else {
+                $liveState.Error = if ($code) { "request failed (HTTP $code)" } else { 'request failed (offline?)' }
+                $liveState.NextAt = $now + $liveInterval
+            }
+            return
+        }
         try {
             $j = $t.Result | ConvertFrom-Json
             $liveState.Data = [pscustomobject]@{
@@ -1181,7 +1207,7 @@ function Update-LivePoll {
                 seven_day = [pscustomobject]@{ used_percentage = [double]$j.seven_day.utilization; resets_at = (Convert-ToEpoch $j.seven_day.resets_at) }
             }
             $liveState.Stamp = $now; $liveState.Error = ''
-        } catch { $liveState.Error = 'unexpected reply'; $liveState.NextAt = $now + 300 }
+        } catch { $liveState.Error = 'unexpected reply'; $liveState.NextAt = $now + $liveInterval }
     }
 }
 
@@ -1370,6 +1396,7 @@ function Request-Refresh($only) {
         $p.NextAt = [math]::Min($p.NextAt, $p.LastAt + 10)
     }
     if ($only) { return }
+    # (a 429's Retry-After still holds: Update-LivePoll waits for RetryAt)
     if (-not $liveState.Task) { $liveState.NextAt = [math]::Min($liveState.NextAt, $liveState.LastAt + 10) }
     $codexState.NextScan = 0; $codexState.Sig = ''
 }
@@ -1583,20 +1610,26 @@ $update = {
     $fh = if ($rl) { $rl.five_hour } else { $null }
     $sd = if ($rl) { $rl.seven_day } else { $null }
     $age = if ($usageState.Data -and $usageState.Data.updatedAt) { [DateTimeOffset]::UtcNow.ToUnixTimeSeconds() - [double]$usageState.Data.updatedAt } else { 0 }
-    $isLive = $false
-    if ($settings.LiveClaudeUsage -and $liveState.Data) {   # fresh live numbers win over the CLI file
+    $fromLive = $false
+    if ($settings.LiveClaudeUsage -and $liveState.Data) {
+        # live numbers win while fresh, and also when the live request fails for a while (429) but they are still
+        # newer than the CLI file (which only updates while the Claude CLI runs)
         $liveAge = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds() - $liveState.Stamp
-        if ($liveAge -lt 600) { $fh = $liveState.Data.five_hour; $sd = $liveState.Data.seven_day; $age = $liveAge; $isLive = $true }
+        $cliAt = if ($usageState.Data -and $usageState.Data.updatedAt) { [double]$usageState.Data.updatedAt } else { 0 }
+        if ($liveAge -lt 600 -or $liveState.Stamp -gt $cliAt) { $fh = $liveState.Data.five_hour; $sd = $liveState.Data.seven_day; $age = $liveAge; $fromLive = $true }
     }
+    $liveErr = Get-LiveError
     $s = $claudeSec
     Set-UsageRow $fh $s.Text1 $s.Bar1 $age
     Set-UsageRow $sd $s.Text2 $s.Bar2 $age
     # where the numbers come from (blank while the first live request is still running)
-    $s.Note.Text = if ($isLive) { 'live' } elseif (-not $settings.LiveClaudeUsage) { 'CLI' } elseif ($liveState.Error) { 'CLI (live failed)' } else { '' }
+    $s.Note.Text = if ($fromLive -and -not $liveErr) { 'live' } elseif ($fromLive) { 'live (paused)' } elseif (-not $settings.LiveClaudeUsage) { 'CLI' } elseif ($liveErr) { 'CLI (live failed)' } else { '' }
     $usageTip = if (-not $settings.LiveClaudeUsage) { 'Live Claude usage is off: these numbers only update while you use the Claude CLI. Turn it on in Settings (gear).' }
-                elseif ($liveState.Error) { "Live Claude usage: $($liveState.Error) - showing the last CLI numbers." }
-                else { 'Live Claude usage (refreshed every 2 minutes).' }
+                elseif ($liveErr -and $fromLive) { "Live Claude usage: $liveErr - showing the last live numbers." }
+                elseif ($liveErr) { "Live Claude usage: $liveErr - showing the last CLI numbers." }
+                else { 'Live Claude usage (refreshed every 5 minutes).' }
     $s.Text1.ToolTip = $usageTip; $s.Text2.ToolTip = $usageTip; $s.Note.ToolTip = $usageTip
+    $s.Mini.ToolTip = "Claude - $usageTip Click to expand."
     Set-MiniUsage $fh '5hr' $s.MiniText1 $s.MiniBar1 $age
     Set-MiniUsage $sd 'Week' $s.MiniText2 $s.MiniBar2 $age
     Update-CodexRows
